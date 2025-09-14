@@ -95,17 +95,25 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
         # Send notification to Poke API with authentication
         # Try different possible endpoints for Poke API
         endpoints_to_try = [
-            f"{poke_api_url}/api/poke",           # Direct poke endpoint
-            f"{poke_api_url}/api/nudge",           # Nudge endpoint
-            f"{poke_api_url}/api/send-poke",       # Send poke endpoint
-            f"{poke_api_url}/poke",                # Simple poke endpoint
-            f"{poke_api_url}/nudge",                # Simple nudge endpoint
-            f"{poke_api_url}/api/notify",          # Generic notify
-            f"{poke_api_url}/api/send-notification", # Generic send notification
-            f"{poke_api_url}/notify",              # Simple notify
-            f"{poke_api_url}/send-notification",   # Simple send notification
-            f"{poke_api_url}/api/v1/poke",         # Versioned poke
-            f"{poke_api_url}/api/v1/nudge"         # Versioned nudge
+            f"{poke_api_url}/api/v1/inbound-sms/webhook",  # Webhook endpoint (might work for outbound too)
+            f"{poke_api_url}/api/v1/outbound-sms",          # Outbound SMS endpoint
+            f"{poke_api_url}/api/v1/send-sms",              # Send SMS endpoint
+            f"{poke_api_url}/api/v1/messages",               # Messages endpoint
+            f"{poke_api_url}/api/v1/poke",                   # Versioned poke
+            f"{poke_api_url}/api/v1/nudge",                  # Versioned nudge
+            f"{poke_api_url}/api/v1/send-poke",              # Versioned send poke
+            f"{poke_api_url}/api/v1/send-nudge",             # Versioned send nudge
+            f"{poke_api_url}/api/poke",                      # Direct poke endpoint
+            f"{poke_api_url}/api/nudge",                     # Nudge endpoint
+            f"{poke_api_url}/api/send-poke",                 # Send poke endpoint
+            f"{poke_api_url}/api/send-sms",                  # Send SMS endpoint
+            f"{poke_api_url}/api/messages",                  # Messages endpoint
+            f"{poke_api_url}/poke",                          # Simple poke endpoint
+            f"{poke_api_url}/nudge",                         # Simple nudge endpoint
+            f"{poke_api_url}/api/notify",                    # Generic notify
+            f"{poke_api_url}/api/send-notification",         # Generic send notification
+            f"{poke_api_url}/notify",                        # Simple notify
+            f"{poke_api_url}/send-notification"              # Simple send notification
         ]
 
         # First, test if the base URL is reachable
