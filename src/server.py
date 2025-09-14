@@ -58,6 +58,11 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
     try:
         # Poke API endpoint for sending notifications
         poke_api_url = os.environ.get("POKE_API_URL", "https://poke.com/api")
+        poke_api_key = os.environ.get("POKE_API_KEY")
+        
+        if not poke_api_key:
+            print(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
+            return
         
         # Prepare notification payload
         payload = {
@@ -68,18 +73,21 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             "action": "your_turn"
         }
         
-        # Send notification to Poke API
+        # Send notification to Poke API with authentication
         response = requests.post(
             f"{poke_api_url}/notify",
             json=payload,
             timeout=10,
-            headers={"Content-Type": "application/json"}
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {poke_api_key}"
+            }
         )
         
         if response.status_code == 200:
             print(f"✅ Notified {player_name} ({player_phone}) - {message}")
         else:
-            print(f"⚠️ Failed to notify {player_name} ({player_phone}): {response.status_code}")
+            print(f"⚠️ Failed to notify {player_name} ({player_phone}): {response.status_code} - {response.text}")
             
     except Exception as e:
         print(f"❌ Error notifying {player_name} ({player_phone}): {e}")
@@ -486,7 +494,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
     # Switch to opponent
     state['current_player'] = opponent
-    
+
     # Notify the opponent it's their turn
     opponent_name = get_player_name(opponent)
     notify_message = f"🎲 Your turn in Poke-R! {player} made their move. Check your hand and make your bet!"
@@ -597,7 +605,7 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     state['phase'] = 'bet2'
     state['current_player'] = state['players'][1 - state['players'].index(player)]
     state['bets'] = {p: 0 for p in state['players']}
-    
+
     # Notify the other player it's their turn for second betting round
     other_player = state['current_player']
     other_player_name = get_player_name(other_player)

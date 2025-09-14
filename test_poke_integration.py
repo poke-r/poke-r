@@ -8,7 +8,7 @@ import time
 
 def test_poke_integration():
     """Test the Poke API integration with poker game notifications"""
-    
+
     # Get session ID
     response = requests.head('https://fastmcp-server-z2pr.onrender.com/mcp', timeout=10)
     session_id = response.headers.get('mcp-session-id')
@@ -24,16 +24,16 @@ def test_poke_integration():
             'jsonrpc': '2.0',
             'method': method
         }
-        
+
         if not method.startswith('notifications/'):
             payload['id'] = request_id
-            
+
         if params is not None:
             payload['params'] = params
-        
-        response = requests.post('https://fastmcp-server-z2pr.onrender.com/mcp', 
+
+        response = requests.post('https://fastmcp-server-z2pr.onrender.com/mcp',
                                headers=headers, json=payload, timeout=30)
-        
+
         lines = response.text.strip().split('\n')
         for line in lines:
             if line.startswith('data: '):
