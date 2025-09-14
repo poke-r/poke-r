@@ -4,21 +4,38 @@ import json
 import random
 import uuid
 import datetime
+import logging
+import traceback
 from typing import List, Dict, Optional
 from fastmcp import FastMCP
 import redis
 
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler('poke-r.log') if os.path.exists('.') else logging.NullHandler()
+    ]
+)
+logger = logging.getLogger("Poke-R")
+
 # Initialize FastMCP server
 mcp = FastMCP("Poke-R Poker Server")
+logger.info("🚀 Initializing Poke-R Poker Server")
 
 # Initialize Redis connection
 try:
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    logger.info(f"🔗 Attempting Redis connection to: {redis_url}")
     r = redis.from_url(redis_url, decode_responses=True)
     # Test connection
     r.ping()
+    logger.info("✅ Redis connection successful")
 except Exception as e:
-    print(f"Redis connection failed: {e}")
+    logger.warning(f"⚠️ Redis connection failed: {e}")
+    logger.info("🔄 Falling back to in-memory storage")
     # Fallback to in-memory storage for development
     r = None
 
@@ -121,80 +138,120 @@ def compare_hands(hand1: List[str], hand2: List[str]) -> int:
 
 def get_game_state(game_id: str) -> Optional[Dict]:
     """Get game state from Redis or return None if not found."""
+    logger.debug(f"🔍 Getting game state for ID: {game_id}")
     if not r:
+        logger.debug("📝 Redis not available, returning None")
         return None
     try:
         state_json = r.get(game_id)
-        return json.loads(state_json) if state_json else None
-    except Exception:
+        if state_json:
+            state = json.loads(state_json)
+            logger.debug(f"✅ Retrieved game state: {len(state.get('players', []))} players, phase: {state.get('phase', 'unknown')}")
+            return state
+        else:
+            logger.debug(f"❌ No game state found for ID: {game_id}")
+            return None
+    except Exception as e:
+        logger.error(f"💥 Error getting game state for {game_id}: {e}")
+        logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
         return None
 
 def save_game_state(game_id: str, state: Dict) -> bool:
     """Save game state to Redis. Returns True if successful."""
+    logger.debug(f"💾 Saving game state for ID: {game_id}")
     if not r:
+        logger.debug("📝 Redis not available, cannot save state")
         return False
     try:
-        r.set(game_id, json.dumps(state), ex=3600)  # Expire after 1 hour
+        state_json = json.dumps(state)
+        r.set(game_id, state_json, ex=3600)  # Expire after 1 hour
+        logger.debug(f"✅ Game state saved successfully: {len(state_json)} bytes, expires in 1 hour")
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"💥 Error saving game state for {game_id}: {e}")
+        logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
         return False
 
 def check_availability(phone: str) -> bool:
     """Check if user is available for Poke-R games."""
+    logger.debug(f"🔍 Checking availability for user: {phone}")
     if not r:
+        logger.debug("📝 Redis not available, defaulting to available")
         return True  # Default to available if no Redis
-
+    
     # Check if availability is enabled
     availability_key = f"user_availability:{phone}"
-    if not r.get(availability_key):
+    availability_status = r.get(availability_key)
+    logger.debug(f"📋 Availability status: {availability_status}")
+    
+    if not availability_status:
+        logger.info(f"❌ User {phone} has not enabled Poke-R availability")
         return False
-
+    
     # Check schedule if set
     schedule_key = f"{phone}:schedule"
     schedule_json = r.get(schedule_key)
     if schedule_json:
+        logger.debug(f"📅 Checking schedule for user: {phone}")
         try:
             schedule = json.loads(schedule_json)
             now = datetime.datetime.now()
             current_time = now.time()
             current_weekday = now.weekday() + 1  # Monday = 1
-
+            
+            logger.debug(f"🕐 Current time: {current_time}, weekday: {current_weekday}")
+            
             for window in schedule.get("windows", []):
+                logger.debug(f"🪟 Checking window: {window}")
                 if current_weekday in window.get("days", []):
                     start_time = datetime.datetime.strptime(window["start"], "%H:%M").time()
                     end_time = datetime.datetime.strptime(window["end"], "%H:%M").time()
+                    logger.debug(f"⏰ Window times: {start_time} - {end_time}")
                     if start_time <= current_time <= end_time:
+                        logger.info(f"✅ User {phone} is available (within scheduled window)")
                         return True
+            logger.info(f"❌ User {phone} is outside scheduled hours")
             return False
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.error(f"💥 Error checking schedule for {phone}: {e}")
+            logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
+    
+    logger.info(f"✅ User {phone} is available (no schedule restrictions)")
     return True
 
 @mcp.tool(description="Start a new 2-player Poke-R poker game")
 def start_poker(players: List[str]) -> Dict:
     """Starts a 2-player Poke-R duel."""
+    logger.info(f"🎮 Starting new poker game with players: {players}")
+    
     if len(players) != 2:
+        logger.error(f"❌ Invalid player count: {len(players)} (expected 2)")
         return {'error': 'Exactly 2 players required'}
-
+    
     # Check player availability
+    logger.info("🔍 Checking player availability...")
     for player in players:
         if not check_availability(player):
+            logger.warning(f"❌ Player {player} is unavailable")
             return {'error': f"{player} is unavailable for Poke-R games—try later?"}
-
+        logger.info(f"✅ Player {player} is available")
+    
     # Generate game ID
     game_id = f"poker_{uuid.uuid4().hex[:8]}"
-
+    logger.info(f"🆔 Generated game ID: {game_id}")
+    
     # Create and shuffle deck
     deck = DECK.copy()
     random.shuffle(deck)
-
+    logger.debug(f"🃏 Deck shuffled: {len(deck)} cards")
+    
     # Deal initial hands
     hands = {
         players[0]: deck[0:5],
         players[1]: deck[5:10]
     }
-
+    logger.info(f"🎯 Dealt hands: {players[0]}={hands[players[0]]}, {players[1]}={hands[players[1]]}")
+    
     # Initialize game state
     state = {
         'game_id': game_id,
@@ -210,17 +267,22 @@ def start_poker(players: List[str]) -> Dict:
         'side_bets': {},
         'created_at': datetime.datetime.now().isoformat()
     }
-
+    logger.info(f"📊 Game state initialized: Phase={state['phase']}, Current Player={state['current_player']}")
+    
     # Save to Redis
     if not save_game_state(game_id, state):
+        logger.error(f"💥 Failed to save game state for {game_id}")
         return {'error': 'Failed to save game state'}
-
+    
     # Send pending invites
+    logger.info("📨 Setting up pending invites...")
     for player in players:
         invite_key = f"{game_id}:pending:{player}"
         if r:
             r.set(invite_key, "1", ex=600)  # 10-minute timeout
-
+            logger.debug(f"📧 Invite set for {player}: {invite_key}")
+    
+    logger.info(f"🎉 Game {game_id} started successfully!")
     return {
         'game_id': game_id,
         'message': f"🎲 Poke-R duel started! Cards sent via DM. {players[0]}, bet first (min 5): bet/call/raise/fold.",
@@ -231,28 +293,37 @@ def start_poker(players: List[str]) -> Dict:
 @mcp.tool(description="Place a bet, call, raise, or fold in the current poker game")
 def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     """Handles bet, call, raise, or fold actions."""
+    logger.info(f"🎯 Betting action: {player} -> {action} (amount: {amount}) in game {game_id}")
+    
     state = get_game_state(game_id)
     if not state:
+        logger.error(f"❌ Game {game_id} not found or expired")
         return {'error': 'Game not found or expired'}
-
+    
     if player != state['current_player']:
+        logger.warning(f"❌ Wrong turn: {player} tried to act, but {state['current_player']} is current player")
         return {'error': 'Not your turn'}
-
+    
     if action not in ['bet', 'call', 'raise', 'fold']:
+        logger.error(f"❌ Invalid action: {action}")
         return {'error': 'Invalid action. Use: bet, call, raise, or fold'}
-
+    
     opponent = state['players'][1 - state['players'].index(player)]
     current_bet = state['bets'].get(opponent, 0)
+    logger.debug(f"🎲 Game state: Phase={state['phase']}, Current bet={current_bet}, Pot={state['pot']}, Player chips={state['chips'][player]}")
 
     if action == 'fold':
+        logger.info(f"🃏 {player} folds! {opponent} wins pot of {state['pot']} chips")
         # Player folds, opponent wins pot
         state['chips'][opponent] += state['pot']
         state['pot'] = 0
         state['bets'] = {p: 0 for p in state['players']}
         state['current_hand'] += 1
-
+        logger.info(f"📊 Hand {state['current_hand']-1} complete. New hand: {state['current_hand']}")
+        
         if state['current_hand'] > 5:  # End after 5 hands
             winner = max(state['chips'], key=state['chips'].get)
+            logger.info(f"🏆 Game over! Winner: {winner} with {state['chips'][winner]} chips")
             save_game_state(game_id, state)
             return {
                 'message': f"{player} folds! {opponent} wins {state['pot']} chips. Game over! {winner} wins with {state['chips'][winner]} chips! 🥳",
@@ -260,8 +331,9 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                 'winner': winner,
                 'final_chips': state['chips']
             }
-
+        
         # Start next hand
+        logger.info("🎲 Starting new hand...")
         deck = DECK.copy()
         random.shuffle(deck)
         state['hands'] = {
@@ -272,7 +344,8 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         state['phase'] = 'bet1'
         state['current_player'] = state['players'][0]
         state['side_bets'] = {}
-
+        logger.info(f"🎯 New hands dealt: {state['players'][0]}={state['hands'][state['players'][0]]}, {state['players'][1]}={state['hands'][state['players'][1]]}")
+        
         save_game_state(game_id, state)
         return {
             'message': f"{player} folds! {opponent} wins {state['pot']} chips. Next hand starting...",
@@ -282,30 +355,43 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
     elif action in ['bet', 'raise']:
         min_bet = current_bet + 5 if action == 'raise' else 5
+        logger.debug(f"💰 {action} validation: amount={amount}, min_bet={min_bet}, player_chips={state['chips'][player]}")
+        
         if amount < min_bet:
+            logger.warning(f"❌ {player} bet too low: {amount} < {min_bet}")
             return {'error': f'Minimum bet is {min_bet} chips'}
         if state['chips'][player] < amount:
+            logger.warning(f"❌ {player} insufficient chips: {state['chips'][player]} < {amount}")
             return {'error': 'Not enough chips'}
-
+        
         state['bets'][player] = amount
         state['chips'][player] -= amount
         state['pot'] += amount
-
+        logger.info(f"💰 {player} {action}s {amount} chips. New pot: {state['pot']}, Player chips: {state['chips'][player]}")
+    
     elif action == 'call':
+        logger.debug(f"📞 Call validation: current_bet={current_bet}, player_chips={state['chips'][player]}")
+        
         if state['chips'][player] < current_bet:
+            logger.warning(f"❌ {player} insufficient chips to call: {state['chips'][player]} < {current_bet}")
             return {'error': 'Not enough chips to call'}
-
+        
         state['bets'][player] = current_bet
         state['chips'][player] -= current_bet
         state['pot'] += current_bet
+        logger.info(f"📞 {player} calls {current_bet} chips. New pot: {state['pot']}, Player chips: {state['chips'][player]}")
 
     # Switch to opponent
     state['current_player'] = opponent
-
+    logger.debug(f"🔄 Turn switched to: {opponent}")
+    
     # Check if betting round is complete
     if state['bets'][player] == state['bets'][opponent] and state['bets'][player] > 0:
+        logger.info(f"✅ Betting round complete! Both players bet {state['bets'][player]} chips")
+        
         if state['phase'] == 'bet1':
             state['phase'] = 'draw'
+            logger.info(f"🎯 Moving to draw phase. {player} can discard up to 3 cards")
             save_game_state(game_id, state)
             return {
                 'message': f"Bets matched! {player}, discard up to 3 cards: 'Poke, discard [indices]'.",
@@ -314,32 +400,46 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             }
         elif state['phase'] == 'bet2':
             state['phase'] = 'showdown'
+            logger.info("🏁 Showdown time! Comparing hands...")
+            
             # Resolve hand
-            winner_idx = compare_hands(state['hands'][state['players'][0]], state['hands'][state['players'][1]])
+            hand1 = state['hands'][state['players'][0]]
+            hand2 = state['hands'][state['players'][1]]
+            winner_idx = compare_hands(hand1, hand2)
+            
+            logger.info(f"🎯 Hand comparison: {state['players'][0]}={hand1} vs {state['players'][1]}={hand2}")
+            
             if winner_idx == 1:
                 winner = state['players'][0]
+                winner_hand = hand1
             elif winner_idx == -1:
                 winner = state['players'][1]
+                winner_hand = hand2
             else:
                 winner = None  # Tie
-
+                winner_hand = None
+            
             if winner:
                 state['chips'][winner] += state['pot']
-                winner_hand_type = evaluate_hand(state['hands'][winner])[0]
+                winner_hand_type = evaluate_hand(winner_hand)[0]
+                logger.info(f"🏆 {winner} wins with {winner_hand_type}: {winner_hand}")
                 message = f"Showdown! {winner} wins {state['pot']} chips with {winner_hand_type}!"
             else:
                 # Split pot on tie
                 split_amount = state['pot'] // 2
                 state['chips'][state['players'][0]] += split_amount
                 state['chips'][state['players'][1]] += split_amount
+                logger.info(f"🤝 Tie! Pot split: {split_amount} chips each")
                 message = f"Showdown! It's a tie! Pot split equally."
-
+            
             state['pot'] = 0
             state['bets'] = {p: 0 for p in state['players']}
             state['current_hand'] += 1
-
+            logger.info(f"📊 Hand {state['current_hand']-1} complete. New hand: {state['current_hand']}")
+            
             if state['current_hand'] > 5:  # End game
                 final_winner = max(state['chips'], key=state['chips'].get)
+                logger.info(f"🏆 Game over! Final winner: {final_winner} with {state['chips'][final_winner]} chips")
                 save_game_state(game_id, state)
                 return {
                     'message': f"{message} Game over! {final_winner} wins with {state['chips'][final_winner]} chips! 🥳",
@@ -347,8 +447,9 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                     'winner': final_winner,
                     'final_chips': state['chips']
                 }
-
+            
             # Start next hand
+            logger.info("🎲 Starting new hand...")
             deck = DECK.copy()
             random.shuffle(deck)
             state['hands'] = {
@@ -359,7 +460,8 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             state['phase'] = 'bet1'
             state['current_player'] = state['players'][0]
             state['side_bets'] = {}
-
+            logger.info(f"🎯 New hands dealt: {state['players'][0]}={state['hands'][state['players'][0]]}, {state['players'][1]}={state['hands'][state['players'][1]]}")
+            
             save_game_state(game_id, state)
             return {
                 'message': f"{message} Next hand starting...",
@@ -368,6 +470,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             }
 
     save_game_state(game_id, state)
+    logger.info(f"✅ Betting action complete. Next turn: {opponent}")
     return {
         'message': f"{player} {action}s {amount or ''}! {opponent}, your move: bet/call/raise/fold.",
         'current_player': opponent,
@@ -378,34 +481,54 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 @mcp.tool(description="Discard up to 3 cards and draw new ones")
 def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     """Discards up to 3 cards and draws new ones."""
+    logger.info(f"🔄 Discard action: {player} discarding cards at indices {indices} in game {game_id}")
+    
     state = get_game_state(game_id)
     if not state:
+        logger.error(f"❌ Game {game_id} not found or expired")
         return {'error': 'Game not found or expired'}
-
+    
     if state['phase'] != 'draw':
+        logger.warning(f"❌ Wrong phase: {state['phase']} (expected 'draw')")
         return {'error': 'Not in discard phase'}
-
+    
     if player != state['current_player']:
+        logger.warning(f"❌ Wrong turn: {player} tried to discard, but {state['current_player']} is current player")
         return {'error': 'Not your turn'}
-
+    
     if len(indices) > 3:
+        logger.warning(f"❌ Too many cards to discard: {len(indices)} > 3")
         return {'error': 'Maximum 3 cards can be discarded'}
-
+    
     if any(i < 1 or i > 5 for i in indices):
+        logger.warning(f"❌ Invalid card indices: {indices} (must be 1-5)")
         return {'error': 'Invalid card indices (use 1-5)'}
-
+    
     # Discard and draw new cards
     hand = state['hands'][player]
+    original_hand = hand.copy()
+    discarded_cards = []
+    new_cards = []
+    
+    logger.debug(f"🎯 Original hand: {original_hand}")
+    
     for i in sorted(indices, reverse=True):
-        hand.pop(i-1)  # Convert to 0-based index
+        discarded_card = hand.pop(i-1)  # Convert to 0-based index
+        discarded_cards.append(discarded_card)
         if state['deck']:
-            hand.append(state['deck'].pop(0))
-
+            new_card = state['deck'].pop(0)
+            hand.append(new_card)
+            new_cards.append(new_card)
+    
+    logger.info(f"🔄 {player} discarded: {discarded_cards}, drew: {new_cards}")
+    logger.info(f"🎯 New hand: {hand}")
+    
     # Switch to second betting round
     state['phase'] = 'bet2'
     state['current_player'] = state['players'][1 - state['players'].index(player)]
     state['bets'] = {p: 0 for p in state['players']}
-
+    logger.info(f"🎯 Moving to bet2 phase. Next player: {state['current_player']}")
+    
     save_game_state(game_id, state)
     return {
         'message': f"New cards dealt to {player}. {state['current_player']}, bet (min 5): bet/call/raise/fold.",
@@ -449,14 +572,18 @@ def place_side_bet(game_id: str, player: str, bet_type: str, amount: int) -> Dic
 @mcp.tool(description="Toggle Poke-R availability for receiving game invites")
 def toggle_availability(phone: str) -> Dict:
     """Toggles Poke-R availability for a user."""
+    logger.info(f"🔧 Toggling availability for user: {phone}")
+    
     if not r:
+        logger.error("❌ Redis not available for availability toggle")
         return {'error': 'Redis not available'}
-
+    
     key = f"user_availability:{phone}"
     current = r.get(key)
     new_state = not bool(current) if current else True
     r.set(key, str(new_state))
-
+    
+    logger.info(f"✅ Availability {'enabled' if new_state else 'disabled'} for {phone}")
     return {
         'message': f"Poke-R availability {'enabled' if new_state else 'disabled'}.",
         'available': new_state
@@ -465,21 +592,27 @@ def toggle_availability(phone: str) -> Dict:
 @mcp.tool(description="Set availability schedule (e.g., '19:00-22:00, Mon-Fri')")
 def set_schedule(phone: str, schedule_str: str) -> Dict:
     """Sets availability schedule for Poke-R games."""
+    logger.info(f"📅 Setting schedule for {phone}: {schedule_str}")
+    
     if not r:
+        logger.error("❌ Redis not available for schedule setting")
         return {'error': 'Redis not available'}
-
+    
     try:
         times, days_str = schedule_str.split(',')
         start, end = times.strip().split('-')
         days = []
-
+        
+        logger.debug(f"🕐 Parsing times: {start} - {end}")
+        
         # Parse days
         day_mapping = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
         for day_range in days_str.split('-'):
             day_range = day_range.strip()
             if day_range in day_mapping:
                 days.append(day_mapping[day_range])
-
+                logger.debug(f"📅 Added day: {day_range} -> {day_mapping[day_range]}")
+        
         schedule = {
             "windows": [{
                 "start": start.strip(),
@@ -487,28 +620,38 @@ def set_schedule(phone: str, schedule_str: str) -> Dict:
                 "days": days
             }]
         }
-
+        
+        logger.info(f"📅 Schedule parsed: {schedule}")
         r.set(f"{phone}:schedule", json.dumps(schedule))
+        logger.info(f"✅ Schedule saved for {phone}")
+        
         return {
             'message': f"Schedule set: {schedule_str}",
             'schedule': schedule
         }
     except Exception as e:
+        logger.error(f"💥 Error parsing schedule '{schedule_str}': {e}")
+        logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
         return {'error': f'Invalid format—try "19:00-22:00, Mon-Fri". Error: {str(e)}'}
 
 @mcp.tool(description="Accept a pending Poke-R game invite")
 def accept_invite(game_id: str, phone: str) -> Dict:
     """Accepts a pending game invite."""
+    logger.info(f"📧 Accepting invite: {phone} -> {game_id}")
+    
     if not r:
+        logger.error("❌ Redis not available for invite acceptance")
         return {'error': 'Redis not available'}
-
+    
     invite_key = f"{game_id}:pending:{phone}"
     if not r.get(invite_key):
+        logger.warning(f"❌ No pending invite found for {phone} in game {game_id}")
         return {'error': 'No pending invite found'}
-
+    
     # Remove invite
     r.delete(invite_key)
-
+    logger.info(f"✅ Invite accepted and removed for {phone}")
+    
     return {
         'message': f"Joined Poke-R game {game_id}! Cards incoming. 🎲",
         'game_id': game_id
@@ -517,10 +660,14 @@ def accept_invite(game_id: str, phone: str) -> Dict:
 @mcp.tool(description="Get current game status and state")
 def get_game_status(game_id: str) -> Dict:
     """Get current game status."""
+    logger.info(f"📊 Getting game status for: {game_id}")
+    
     state = get_game_state(game_id)
     if not state:
+        logger.warning(f"❌ Game {game_id} not found or expired")
         return {'error': 'Game not found or expired'}
-
+    
+    logger.info(f"📊 Game status: Phase={state['phase']}, Hand={state['current_hand']}, Pot={state['pot']}, Current Player={state['current_player']}")
     return {
         'game_id': game_id,
         'players': state['players'],
@@ -535,13 +682,18 @@ def get_game_status(game_id: str) -> Dict:
 @mcp.tool(description="Get server information")
 def get_server_info() -> Dict:
     """Get information about the Poke-R server."""
-    return {
+    logger.info("ℹ️ Server info requested")
+    
+    info = {
         "server_name": "Poke-R Poker Server",
         "version": "1.0.0",
         "environment": os.environ.get("ENVIRONMENT", "development"),
         "python_version": os.sys.version.split()[0],
         "redis_available": r is not None
     }
+    
+    logger.info(f"ℹ️ Server info: {info}")
+    return info
 
 # Add health check endpoint
 from fastapi import FastAPI
@@ -552,23 +704,40 @@ app = FastAPI()
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Render deployment"""
-    return JSONResponse({
+    logger.info("🏥 Health check requested")
+    
+    health_status = {
         "status": "healthy",
         "redis_available": r is not None,
         "server": "Poke-R Poker Server",
         "version": "1.0.0"
-    })
+    }
+    
+    logger.info(f"🏥 Health check response: {health_status}")
+    return JSONResponse(health_status)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
-
+    
+    logger.info("🚀 Starting Poke-R MCP server...")
+    logger.info(f"🌐 Server configuration: {host}:{port}")
+    logger.info(f"🔗 Redis available: {r is not None}")
+    logger.info(f"🌍 Environment: {os.environ.get('ENVIRONMENT', 'development')}")
+    logger.info(f"🐍 Python version: {os.sys.version.split()[0]}")
+    
     print(f"Starting Poke-R MCP server on {host}:{port}")
     print(f"Redis available: {r is not None}")
-
-    mcp.run(
-        transport="http",
-        host=host,
-        port=port,
-        stateless_http=True
-    )
+    
+    try:
+        logger.info("🎮 Starting MCP server...")
+        mcp.run(
+            transport="http",
+            host=host,
+            port=port,
+            stateless_http=True
+        )
+    except Exception as e:
+        logger.error(f"💥 Server startup failed: {e}")
+        logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
+        raise
