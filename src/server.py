@@ -81,11 +81,10 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             logger.warning(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
             return
 
-        # Prepare Poke API payload - send everything as a single message string
-        full_message = f"🎲 Poke-R Game {game_id}\n{message}\n\nGame Type: Poker\nAction: Poke"
+        # Prepare Poke API payload - only send message field with phone number included
+        full_message = f"🎲 Poke-R Game {game_id}\nTo: {player_phone}\n{message}\n\nGame Type: Poker\nAction: Poke"
         
         payload = {
-            "phone": player_phone,
             "message": full_message
         }
 
