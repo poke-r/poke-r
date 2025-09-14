@@ -404,8 +404,28 @@ def clear_active_game(player_phones: List[str]) -> None:
         player_key = ":".join(sorted(player_phones))
         r.delete(f"active_game:{player_key}")
         logger.info(f"🧹 Cleared active game for players {player_phones}")
-    except Exception as e:
-        logger.error(f"❌ Error clearing active game: {e}")
+
+def generate_game_id() -> str:
+    """Generate a human-readable game ID using word combinations."""
+    # Lists of poker-related words
+    poker_words = [
+        "ace", "king", "queen", "jack", "ten", "nine", "eight", "seven", "six", "five", "four", "three", "two",
+        "spade", "heart", "club", "diamond", "flush", "straight", "pair", "full", "house", "royal",
+        "bluff", "fold", "raise", "call", "bet", "pot", "chip", "deal", "hand", "draw", "showdown"
+    ]
+    
+    # Additional descriptive words
+    descriptive_words = [
+        "wild", "bold", "sharp", "quick", "lucky", "brave", "smart", "wise", "cool", "hot",
+        "fast", "slow", "high", "low", "big", "small", "red", "black", "gold", "silver"
+    ]
+    
+    # Combine words for unique combinations
+    word1 = random.choice(poker_words)
+    word2 = random.choice(descriptive_words)
+    number = random.randint(10, 99)
+    
+    return f"{word1}-{word2}-{number}"
 
 @mcp.tool(description="Start a new 2-player Poke-R poker game")
 def start_poker(players: List[str]) -> Dict:
@@ -448,8 +468,8 @@ def start_poker(players: List[str]) -> Dict:
             'current_player': get_player_name(get_game_state(existing_game_id)['current_player'])
         }
 
-    # Generate game ID
-    game_id = f"poker_{uuid.uuid4().hex[:8]}"
+    # Generate human-readable game ID
+    game_id = generate_game_id()
 
     # Create and shuffle deck
     deck = DECK.copy()
@@ -537,14 +557,14 @@ def get_my_hand(game_id: str, player: str) -> Dict:
         def card_rank(card):
             rank = card[:-1]  # Remove suit
             return rank_order.get(rank, int(rank)) if rank.isdigit() else rank_order[rank]
-        
+
         return sorted(cards, key=card_rank, reverse=True)  # High to low
-    
+
     # Sort the hand for better visual display
     sorted_hand = sort_cards_by_rank(player_hand)
     hand_emojis = format_cards(sorted_hand)
     hand_display = " | ".join(hand_emojis)
-    
+
     # Add hand analysis (use original hand for evaluation)
     hand_type, hand_value, kickers = evaluate_hand(player_hand)
 
