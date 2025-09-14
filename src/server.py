@@ -36,6 +36,22 @@ DECK = [f"{rank}{suit}" for rank in "23456789TJQKA" for suit in "HDCS"]
 # Card ranking for hand evaluation
 CARD_RANKS = {rank: i for i, rank in enumerate("23456789TJQKA")}
 
+# Colorful emoji card representations
+CARD_EMOJIS = {
+    # Hearts (Red)
+    '2H': '2♥️', '3H': '3♥️', '4H': '4♥️', '5H': '5♥️', '6H': '6♥️', '7H': '7♥️', '8H': '8♥️', '9H': '9♥️', 'TH': '10♥️', 'JH': 'J♥️', 'QH': 'Q♥️', 'KH': 'K♥️', 'AH': 'A♥️',
+    # Diamonds (Red)
+    '2D': '2♦️', '3D': '3♦️', '4D': '4♦️', '5D': '5♦️', '6D': '6♦️', '7D': '7♦️', '8D': '8♦️', '9D': '9♦️', 'TD': '10♦️', 'JD': 'J♦️', 'QD': 'Q♦️', 'KD': 'K♦️', 'AD': 'A♦️',
+    # Clubs (Black)
+    '2C': '2♣️', '3C': '3♣️', '4C': '4♣️', '5C': '5♣️', '6C': '6♣️', '7C': '7♣️', '8C': '8♣️', '9C': '9♣️', 'TC': '10♣️', 'JC': 'J♣️', 'QC': 'Q♣️', 'KC': 'K♣️', 'AC': 'A♣️',
+    # Spades (Black)
+    '2S': '2♠️', '3S': '3♠️', '4S': '4♠️', '5S': '5♠️', '6S': '6♠️', '7S': '7♠️', '8S': '8♠️', '9S': '9♠️', 'TS': '10♠️', 'JS': 'J♠️', 'QS': 'Q♠️', 'KS': 'K♠️', 'AS': 'A♠️'
+}
+
+def format_cards(cards: List[str]) -> List[str]:
+    """Convert card codes to colorful emoji representations."""
+    return [CARD_EMOJIS.get(card, card) for card in cards]
+
 def evaluate_hand(cards: List[str]) -> tuple:
     """Evaluate poker hand strength. Returns (hand_type, rank_value, kickers)."""
     if len(cards) != 5:
@@ -335,22 +351,23 @@ def get_my_hand(game_id: str, player: str) -> Dict:
     state = get_game_state(game_id)
     if not state:
         return {'error': 'Game not found or expired'}
-    
+
     # Convert player identifier to phone number
     player_phone = get_player_phone(player)
-    
+
     # Check if player is in the game
     if player_phone not in state['players']:
         return {'error': 'Player not in this game'}
-    
+
     # Get player's hand
     player_hand = state['hands'].get(player_phone, [])
     player_name = get_player_name(player_phone)
-    
+
     return {
         'game_id': game_id,
         'player': player_name,
-        'hand': player_hand,
+        'hand': format_cards(player_hand),
+        'hand_codes': player_hand,  # Keep original codes for game logic
         'chips': state['chips'].get(player_phone, 0),
         'current_player': get_player_name(state['current_player']),
         'phase': state['phase'],
@@ -455,7 +472,9 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             if winner:
                 state['chips'][winner] += state['pot']
                 winner_hand_type = evaluate_hand(state['hands'][winner])[0]
-                message = f"Showdown! {winner} wins {state['pot']} chips with {winner_hand_type}!"
+                winner_hand_emojis = format_cards(state['hands'][winner])
+                winner_name = get_player_name(winner)
+                message = f"Showdown! {winner_name} wins {state['pot']} chips with {winner_hand_type}! Hand: {' '.join(winner_hand_emojis)}"
             else:
                 # Split pot on tie
                 split_amount = state['pot'] // 2
