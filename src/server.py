@@ -67,8 +67,8 @@ def format_cards(cards: List[str]) -> List[str]:
     return [CARD_EMOJIS.get(card, card) for card in cards]
 
 def notify_player_turn(game_id: str, player_phone: str, player_name: str, message: str) -> None:
-    """Send notification to player via Poke API when it's their turn."""
-    logger.info(f"🔔 NOTIFY_PLAYER_TURN called - game_id={game_id}, player={player_name} ({player_phone}), message='{message}'")
+    """Send poke/nudge to player via Poke API when it's their turn."""
+    logger.info(f"🔔 POKE_PLAYER_TURN called - game_id={game_id}, player={player_name} ({player_phone}), message='{message}'")
 
     try:
         # Poke API endpoint for sending notifications
@@ -81,28 +81,33 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             logger.warning(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
             return
 
-        # Prepare notification payload
+        # Prepare Poke API payload - use "poke" action to nudge the player
         payload = {
             "phone": player_phone,
             "message": message,
             "game_id": game_id,
             "game_type": "poker",
-            "action": "your_turn"
+            "action": "poke"  # Use "poke" to nudge the player
         }
 
-        logger.info(f"📤 Sending Poke API notification - URL={poke_api_url}/notify, payload={json.dumps(payload)}")
+        logger.info(f"📤 Sending Poke API poke/nudge - payload={json.dumps(payload)}")
 
         # Send notification to Poke API with authentication
-        # Try different possible endpoints
+        # Try different possible endpoints for Poke API
         endpoints_to_try = [
-            f"{poke_api_url}/api/notify",
-            f"{poke_api_url}/api/send-notification", 
-            f"{poke_api_url}/notify",
-            f"{poke_api_url}/send-notification",
-            f"{poke_api_url}/api/v1/notify",
-            f"{poke_api_url}/api/v1/send-notification"
+            f"{poke_api_url}/api/poke",           # Direct poke endpoint
+            f"{poke_api_url}/api/nudge",           # Nudge endpoint
+            f"{poke_api_url}/api/send-poke",       # Send poke endpoint
+            f"{poke_api_url}/poke",                # Simple poke endpoint
+            f"{poke_api_url}/nudge",                # Simple nudge endpoint
+            f"{poke_api_url}/api/notify",          # Generic notify
+            f"{poke_api_url}/api/send-notification", # Generic send notification
+            f"{poke_api_url}/notify",              # Simple notify
+            f"{poke_api_url}/send-notification",   # Simple send notification
+            f"{poke_api_url}/api/v1/poke",         # Versioned poke
+            f"{poke_api_url}/api/v1/nudge"         # Versioned nudge
         ]
-        
+
         # First, test if the base URL is reachable
         logger.info(f"🔍 Testing base URL reachability: {poke_api_url}")
         try:
@@ -126,11 +131,11 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
                         "Authorization": f"Bearer {poke_api_key}"
                     }
                 )
-                
+
                 logger.info(f"📥 Response from {endpoint} - status_code={response.status_code}")
                 logger.info(f"📋 Response headers: {dict(response.headers)}")
                 logger.info(f"📄 Response body preview: {response.text[:200]}...")
-                
+
                 # If we get a 200 or 201, this endpoint works
                 if response.status_code in [200, 201]:
                     successful_endpoint = endpoint
@@ -145,7 +150,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
                     logger.warning(f"⚠️ Endpoint {endpoint} returned {response.status_code}, trying next...")
                     logger.warning(f"⚠️ Full response body: {response.text}")
                     continue
-                    
+
             except Exception as e:
                 logger.warning(f"⚠️ Exception with endpoint {endpoint}: {e}")
                 logger.warning(f"⚠️ Exception type: {type(e).__name__}")
@@ -160,10 +165,10 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
         logger.info(f"📥 Poke API response - status_code={response.status_code}, headers={dict(response.headers)}")
 
         if response.status_code in [200, 201]:
-            logger.info(f"✅ Successfully notified {player_name} ({player_phone}) via {successful_endpoint} - {message}")
+            logger.info(f"✅ Successfully poked {player_name} ({player_phone}) via {successful_endpoint} - {message}")
             logger.info(f"📱 Response body: {response.text}")
         else:
-            logger.error(f"⚠️ Failed to notify {player_name} ({player_phone}) via {successful_endpoint}: {response.status_code} - {response.text}")
+            logger.error(f"⚠️ Failed to poke {player_name} ({player_phone}) via {successful_endpoint}: {response.status_code} - {response.text}")
 
     except Exception as e:
         logger.error(f"❌ Error notifying {player_name} ({player_phone}): {e}")
