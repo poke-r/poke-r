@@ -165,7 +165,8 @@ def check_availability(phone: str) -> bool:
 
         # Check if availability is enabled
         availability_key = f"user_availability:{phone}"
-        if not r.get(availability_key):
+        availability_value = r.get(availability_key)
+        if not availability_value or availability_value.lower() != 'true':
             return False
 
         # Check schedule if set
