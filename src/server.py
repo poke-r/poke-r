@@ -530,11 +530,22 @@ def get_my_hand(game_id: str, player: str) -> Dict:
     player_hand = state['hands'].get(player_phone, [])
     player_name = get_player_name(player_phone)
 
-    # Create visually appealing hand display
-    hand_emojis = format_cards(player_hand)
+    # Sort cards by rank for better visual display
+    def sort_cards_by_rank(cards):
+        """Sort cards by rank (A=14, K=13, Q=12, J=11, T=10, 9-2)"""
+        rank_order = {'A': 14, 'K': 13, 'Q': 12, 'J': 11, 'T': 10}
+        def card_rank(card):
+            rank = card[:-1]  # Remove suit
+            return rank_order.get(rank, int(rank)) if rank.isdigit() else rank_order[rank]
+        
+        return sorted(cards, key=card_rank, reverse=True)  # High to low
+    
+    # Sort the hand for better visual display
+    sorted_hand = sort_cards_by_rank(player_hand)
+    hand_emojis = format_cards(sorted_hand)
     hand_display = " | ".join(hand_emojis)
-
-    # Add hand analysis
+    
+    # Add hand analysis (use original hand for evaluation)
     hand_type, hand_value, kickers = evaluate_hand(player_hand)
 
     return {
@@ -543,6 +554,7 @@ def get_my_hand(game_id: str, player: str) -> Dict:
         'hand': hand_emojis,
         'hand_display': hand_display,
         'hand_codes': player_hand,  # Keep original codes for game logic
+        'sorted_hand_codes': sorted_hand,  # Sorted codes for reference
         'hand_type': hand_type,
         'hand_value': hand_value,
         'chips': state['chips'].get(player_phone, 0),
