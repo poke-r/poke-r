@@ -69,18 +69,18 @@ def format_cards(cards: List[str]) -> List[str]:
 def notify_player_turn(game_id: str, player_phone: str, player_name: str, message: str) -> None:
     """Send notification to player via Poke API when it's their turn."""
     logger.info(f"🔔 NOTIFY_PLAYER_TURN called - game_id={game_id}, player={player_name} ({player_phone}), message='{message}'")
-    
+
     try:
         # Poke API endpoint for sending notifications
-        poke_api_url = os.environ.get("POKE_API_URL", "https://poke.com/api")
+        poke_api_url = os.environ.get("POKE_API_URL", "https://poke.com")
         poke_api_key = os.environ.get("POKE_API_KEY")
-        
+
         logger.info(f"🔧 Poke API config - URL={poke_api_url}, API_KEY={'***' if poke_api_key else 'NOT_SET'}")
-        
+
         if not poke_api_key:
             logger.warning(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
             return
-        
+
         # Prepare notification payload
         payload = {
             "phone": player_phone,
@@ -89,28 +89,64 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             "game_type": "poker",
             "action": "your_turn"
         }
-        
+
         logger.info(f"📤 Sending Poke API notification - URL={poke_api_url}/notify, payload={json.dumps(payload)}")
-        
+
         # Send notification to Poke API with authentication
-        response = requests.post(
+        # Try different possible endpoints
+        endpoints_to_try = [
+            f"{poke_api_url}/api/notify",
+            f"{poke_api_url}/api/send-notification", 
             f"{poke_api_url}/notify",
-            json=payload,
-            timeout=10,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {poke_api_key}"
-            }
-        )
+            f"{poke_api_url}/send-notification"
+        ]
         
+        response = None
+        successful_endpoint = None
+        
+        for endpoint in endpoints_to_try:
+            logger.info(f"📤 Trying Poke API endpoint: {endpoint}")
+            try:
+                response = requests.post(
+                    endpoint,
+                    json=payload,
+                    timeout=10,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {poke_api_key}"
+                    }
+                )
+                
+                logger.info(f"📥 Response from {endpoint} - status_code={response.status_code}")
+                
+                # If we get a 200 or 201, this endpoint works
+                if response.status_code in [200, 201]:
+                    successful_endpoint = endpoint
+                    break
+                # If we get a 404, try the next endpoint
+                elif response.status_code == 404:
+                    logger.info(f"🔄 Endpoint {endpoint} not found, trying next...")
+                    continue
+                # For other errors, log and try next
+                else:
+                    logger.warning(f"⚠️ Endpoint {endpoint} returned {response.status_code}, trying next...")
+                    continue
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Error with endpoint {endpoint}: {e}")
+                continue
+        
+        if not response:
+            raise Exception("All Poke API endpoints failed")
+
         logger.info(f"📥 Poke API response - status_code={response.status_code}, headers={dict(response.headers)}")
         
-        if response.status_code == 200:
-            logger.info(f"✅ Successfully notified {player_name} ({player_phone}) - {message}")
+        if response.status_code in [200, 201]:
+            logger.info(f"✅ Successfully notified {player_name} ({player_phone}) via {successful_endpoint} - {message}")
             logger.info(f"📱 Response body: {response.text}")
         else:
-            logger.error(f"⚠️ Failed to notify {player_name} ({player_phone}): {response.status_code} - {response.text}")
-            
+            logger.error(f"⚠️ Failed to notify {player_name} ({player_phone}) via {successful_endpoint}: {response.status_code} - {response.text}")
+
     except Exception as e:
         logger.error(f"❌ Error notifying {player_name} ({player_phone}): {e}")
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
@@ -334,7 +370,7 @@ def register_player_tool(phone: str, name: str) -> Dict:
 def start_poker(players: List[str]) -> Dict:
     """Starts a 2-player Poke-R duel."""
     logger.info(f"🎲 START_POKER called - players={players}")
-    
+
     if len(players) != 2:
         logger.error(f"❌ Invalid player count - expected 2, got {len(players)}")
         return {'error': 'Exactly 2 players required'}
@@ -452,14 +488,14 @@ def get_my_hand(game_id: str, player: str) -> Dict:
 def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     """Handles bet, call, raise, or fold actions."""
     logger.info(f"🎲 PLACE_BET called - game_id={game_id}, player={player}, action={action}, amount={amount}")
-    
+
     state = get_game_state(game_id)
     if not state:
         logger.error(f"❌ Game not found or expired - game_id={game_id}")
         return {'error': 'Game not found or expired'}
 
     logger.info(f"🎮 Game state - current_player={state['current_player']}, phase={state['phase']}, pot={state['pot']}")
-    
+
     if player != state['current_player']:
         logger.warning(f"⚠️ Not player's turn - player={player}, current_player={state['current_player']}")
         return {'error': 'Not your turn'}
@@ -470,7 +506,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
     opponent = state['players'][1 - state['players'].index(player)]
     current_bet = state['bets'].get(opponent, 0)
-    
+
     logger.info(f"🎯 Betting details - opponent={opponent}, current_bet={current_bet}, player_bet={state['bets'].get(player, 0)}")
 
     if action == 'fold':
@@ -531,7 +567,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     # Switch to opponent
     logger.info(f"🔄 Switching turns - from {player} to {opponent}")
     state['current_player'] = opponent
-    
+
     # Notify the opponent it's their turn
     opponent_name = get_player_name(opponent)
     notify_message = f"🎲 Your turn in Poke-R! {player} made their move. Check your hand and make your bet!"
@@ -617,7 +653,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     """Discards up to 3 cards and draws new ones."""
     logger.info(f"🎲 DISCARD_CARDS called - game_id={game_id}, player={player}, indices={indices}")
-    
+
     state = get_game_state(game_id)
     if not state:
         logger.error(f"❌ Game not found or expired - game_id={game_id}")
@@ -782,10 +818,10 @@ async def health_check():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
-    
+
     logger.info(f"🚀 Starting Poke-R MCP server on {host}:{port}")
     logger.info(f"🔧 Environment variables - POKE_API_URL={os.environ.get('POKE_API_URL', 'NOT_SET')}, POKE_API_KEY={'***' if os.environ.get('POKE_API_KEY') else 'NOT_SET'}")
     logger.info(f"📊 Logging configured - level=INFO, handlers=console+file")
-    
+
     print(f"Starting Poke-R MCP server on {host}:{port}")
     mcp.run(transport="http", host=host, port=port)
