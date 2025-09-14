@@ -404,6 +404,8 @@ def clear_active_game(player_phones: List[str]) -> None:
         player_key = ":".join(sorted(player_phones))
         r.delete(f"active_game:{player_key}")
         logger.info(f"🧹 Cleared active game for players {player_phones}")
+    except Exception as e:
+        logger.error(f"❌ Error clearing active game: {e}")
 
 def generate_game_id() -> str:
     """Generate a human-readable game ID using word combinations."""
@@ -413,18 +415,18 @@ def generate_game_id() -> str:
         "spade", "heart", "club", "diamond", "flush", "straight", "pair", "full", "house", "royal",
         "bluff", "fold", "raise", "call", "bet", "pot", "chip", "deal", "hand", "draw", "showdown"
     ]
-    
+
     # Additional descriptive words
     descriptive_words = [
         "wild", "bold", "sharp", "quick", "lucky", "brave", "smart", "wise", "cool", "hot",
         "fast", "slow", "high", "low", "big", "small", "red", "black", "gold", "silver"
     ]
-    
+
     # Combine words for unique combinations
     word1 = random.choice(poker_words)
     word2 = random.choice(descriptive_words)
     number = random.randint(10, 99)
-    
+
     return f"{word1}-{word2}-{number}"
 
 @mcp.tool(description="Start a new 2-player Poke-R poker game")
