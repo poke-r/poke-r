@@ -92,29 +92,8 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
 
         logger.info(f"📤 Sending Poke API poke/nudge - payload={json.dumps(payload)}")
 
-        # Send notification to Poke API with authentication
-        # Try different possible endpoints for Poke API
-        endpoints_to_try = [
-            f"{poke_api_url}/api/v1/inbound-sms/webhook",  # Webhook endpoint (might work for outbound too)
-            f"{poke_api_url}/api/v1/outbound-sms",          # Outbound SMS endpoint
-            f"{poke_api_url}/api/v1/send-sms",              # Send SMS endpoint
-            f"{poke_api_url}/api/v1/messages",               # Messages endpoint
-            f"{poke_api_url}/api/v1/poke",                   # Versioned poke
-            f"{poke_api_url}/api/v1/nudge",                  # Versioned nudge
-            f"{poke_api_url}/api/v1/send-poke",              # Versioned send poke
-            f"{poke_api_url}/api/v1/send-nudge",             # Versioned send nudge
-            f"{poke_api_url}/api/poke",                      # Direct poke endpoint
-            f"{poke_api_url}/api/nudge",                     # Nudge endpoint
-            f"{poke_api_url}/api/send-poke",                 # Send poke endpoint
-            f"{poke_api_url}/api/send-sms",                  # Send SMS endpoint
-            f"{poke_api_url}/api/messages",                  # Messages endpoint
-            f"{poke_api_url}/poke",                          # Simple poke endpoint
-            f"{poke_api_url}/nudge",                         # Simple nudge endpoint
-            f"{poke_api_url}/api/notify",                    # Generic notify
-            f"{poke_api_url}/api/send-notification",         # Generic send notification
-            f"{poke_api_url}/notify",                        # Simple notify
-            f"{poke_api_url}/send-notification"              # Simple send notification
-        ]
+        # Use the only available Poke API endpoint
+        endpoint = f"{poke_api_url}/api/v1/inbound-sms/webhook"
 
         # First, test if the base URL is reachable
         logger.info(f"🔍 Testing base URL reachability: {poke_api_url}")
@@ -124,59 +103,36 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
         except Exception as e:
             logger.warning(f"⚠️ Base URL not reachable: {e}")
 
-        response = None
-        successful_endpoint = None
-
-        for endpoint in endpoints_to_try:
-            logger.info(f"📤 Trying Poke API endpoint: {endpoint}")
-            try:
-                response = requests.post(
-                    endpoint,
-                    json=payload,
-                    timeout=10,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {poke_api_key}"
-                    }
-                )
-
-                logger.info(f"📥 Response from {endpoint} - status_code={response.status_code}")
-                logger.info(f"📋 Response headers: {dict(response.headers)}")
-                logger.info(f"📄 Response body preview: {response.text[:200]}...")
-
-                # If we get a 200 or 201, this endpoint works
-                if response.status_code in [200, 201]:
-                    successful_endpoint = endpoint
-                    logger.info(f"✅ Found working endpoint: {endpoint}")
-                    break
-                # If we get a 404, try the next endpoint
-                elif response.status_code == 404:
-                    logger.info(f"🔄 Endpoint {endpoint} not found (404), trying next...")
-                    continue
-                # For other errors, log and try next
-                else:
-                    logger.warning(f"⚠️ Endpoint {endpoint} returned {response.status_code}, trying next...")
-                    logger.warning(f"⚠️ Full response body: {response.text}")
-                    continue
-
-            except Exception as e:
-                logger.warning(f"⚠️ Exception with endpoint {endpoint}: {e}")
-                logger.warning(f"⚠️ Exception type: {type(e).__name__}")
-                continue
-
-        if not response:
-            logger.error(f"❌ All Poke API endpoints failed for {player_name} ({player_phone})")
-            logger.error(f"❌ Tried endpoints: {endpoints_to_try}")
+        # Send to the only available endpoint
+        logger.info(f"📤 Sending to Poke API endpoint: {endpoint}")
+        try:
+            response = requests.post(
+                endpoint,
+                json=payload,
+                timeout=10,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {poke_api_key}"
+                }
+            )
+            
+            logger.info(f"📥 Response from {endpoint} - status_code={response.status_code}")
+            logger.info(f"📋 Response headers: {dict(response.headers)}")
+            logger.info(f"📄 Response body preview: {response.text[:200]}...")
+            
+        except Exception as e:
+            logger.error(f"❌ Exception with endpoint {endpoint}: {e}")
+            logger.error(f"❌ Exception type: {type(e).__name__}")
             logger.error(f"❌ Payload was: {json.dumps(payload)}")
-            raise Exception("All Poke API endpoints failed")
+            raise Exception(f"Failed to send to Poke API endpoint: {e}")
 
         logger.info(f"📥 Poke API response - status_code={response.status_code}, headers={dict(response.headers)}")
-
+        
         if response.status_code in [200, 201]:
-            logger.info(f"✅ Successfully poked {player_name} ({player_phone}) via {successful_endpoint} - {message}")
+            logger.info(f"✅ Successfully poked {player_name} ({player_phone}) via {endpoint} - {message}")
             logger.info(f"📱 Response body: {response.text}")
         else:
-            logger.error(f"⚠️ Failed to poke {player_name} ({player_phone}) via {successful_endpoint}: {response.status_code} - {response.text}")
+            logger.error(f"⚠️ Failed to poke {player_name} ({player_phone}) via {endpoint}: {response.status_code} - {response.text}")
 
     except Exception as e:
         logger.error(f"❌ Error notifying {player_name} ({player_phone}): {e}")
