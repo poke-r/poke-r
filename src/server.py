@@ -704,6 +704,7 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
 @mcp.tool(description="Send a poke/nudge to another player in a game")
 def poke_player(game_id: str, from_player: str, to_player: str, message: str = None) -> Dict:
     """Send a poke/nudge to another player in a game."""
+    # Force redeploy - fix function name references
     logger.info(f"🔔 POKE_PLAYER called - game_id={game_id}, from={from_player}, to={to_player}, message='{message}'")
 
     state = get_game_state(game_id)
