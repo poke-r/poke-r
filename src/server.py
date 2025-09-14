@@ -74,7 +74,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
     # The Poke API doesn't support sending messages to other users
     # For now, players should check game status regularly
     logger.info(f"📝 Poke API disabled - players should check game status regularly")
-    
+
     # Commented out Poke API integration until we figure out how to send to other users
     """
     try:
@@ -90,7 +90,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
 
         # Prepare Poke API payload - only send message field with phone number included
         full_message = f"🎲 Poke-R Game {game_id}\nTo: {player_phone}\n{message}\n\nGame Type: Poker\nAction: Poke"
-        
+
         payload = {
             "message": full_message
         }
@@ -535,7 +535,7 @@ def get_my_hand(game_id: str, player: str) -> Dict:
     hand_display = " | ".join(hand_emojis)
 
     # Add hand analysis
-    hand_type, hand_value = evaluate_hand(player_hand)
+    hand_type, hand_value, kickers = evaluate_hand(player_hand)
 
     return {
         'game_id': game_id,
@@ -794,7 +794,7 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
 def poke_player(game_id: str, from_player: str, to_player: str, message: str = None) -> Dict:
     """Send a poke/nudge to another player in a game."""
     logger.info(f"🔔 POKE_PLAYER called - game_id={game_id}, from={from_player}, to={to_player}, message='{message}'")
-    
+
     # Poke API integration temporarily disabled
     return {
         'message': f"🔔 Poke functionality temporarily disabled. Players should check game status regularly!",
