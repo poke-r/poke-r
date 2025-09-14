@@ -5,9 +5,22 @@ import random
 import uuid
 import datetime
 import requests
+import logging
+import traceback
 from typing import List, Dict, Optional
 from fastmcp import FastMCP
 import redis
+
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('poke-r-server.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP("Poke-R Poker Server")
@@ -55,13 +68,17 @@ def format_cards(cards: List[str]) -> List[str]:
 
 def notify_player_turn(game_id: str, player_phone: str, player_name: str, message: str) -> None:
     """Send notification to player via Poke API when it's their turn."""
+    logger.info(f"🔔 NOTIFY_PLAYER_TURN called - game_id={game_id}, player={player_name} ({player_phone}), message='{message}'")
+    
     try:
         # Poke API endpoint for sending notifications
         poke_api_url = os.environ.get("POKE_API_URL", "https://poke.com/api")
         poke_api_key = os.environ.get("POKE_API_KEY")
         
+        logger.info(f"🔧 Poke API config - URL={poke_api_url}, API_KEY={'***' if poke_api_key else 'NOT_SET'}")
+        
         if not poke_api_key:
-            print(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
+            logger.warning(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
             return
         
         # Prepare notification payload
@@ -72,6 +89,8 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             "game_type": "poker",
             "action": "your_turn"
         }
+        
+        logger.info(f"📤 Sending Poke API notification - URL={poke_api_url}/notify, payload={json.dumps(payload)}")
         
         # Send notification to Poke API with authentication
         response = requests.post(
@@ -84,13 +103,17 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             }
         )
         
+        logger.info(f"📥 Poke API response - status_code={response.status_code}, headers={dict(response.headers)}")
+        
         if response.status_code == 200:
-            print(f"✅ Notified {player_name} ({player_phone}) - {message}")
+            logger.info(f"✅ Successfully notified {player_name} ({player_phone}) - {message}")
+            logger.info(f"📱 Response body: {response.text}")
         else:
-            print(f"⚠️ Failed to notify {player_name} ({player_phone}): {response.status_code} - {response.text}")
+            logger.error(f"⚠️ Failed to notify {player_name} ({player_phone}): {response.status_code} - {response.text}")
             
     except Exception as e:
-        print(f"❌ Error notifying {player_name} ({player_phone}): {e}")
+        logger.error(f"❌ Error notifying {player_name} ({player_phone}): {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
         # Don't fail the game if notification fails
 
 def evaluate_hand(cards: List[str]) -> tuple:
@@ -310,7 +333,10 @@ def register_player_tool(phone: str, name: str) -> Dict:
 @mcp.tool(description="Start a new 2-player Poke-R poker game")
 def start_poker(players: List[str]) -> Dict:
     """Starts a 2-player Poke-R duel."""
+    logger.info(f"🎲 START_POKER called - players={players}")
+    
     if len(players) != 2:
+        logger.error(f"❌ Invalid player count - expected 2, got {len(players)}")
         return {'error': 'Exactly 2 players required'}
 
     # Convert player identifiers to phone numbers
@@ -380,6 +406,7 @@ def start_poker(players: List[str]) -> Dict:
     first_player_name = player_names[0]
     first_player_phone = player_phones[0]
     notify_message = f"🎲 Poke-R game started! Your turn to bet first. Check your hand and make your move!"
+    logger.info(f"📢 About to notify first player - player={first_player_name} ({first_player_phone}), message='{notify_message}'")
     notify_player_turn(game_id, first_player_phone, first_player_name, notify_message)
 
     # Return game info without revealing hands (hands should be sent via DM)
@@ -424,18 +451,27 @@ def get_my_hand(game_id: str, player: str) -> Dict:
 @mcp.tool(description="Place a bet, call, raise, or fold in the current poker game")
 def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     """Handles bet, call, raise, or fold actions."""
+    logger.info(f"🎲 PLACE_BET called - game_id={game_id}, player={player}, action={action}, amount={amount}")
+    
     state = get_game_state(game_id)
     if not state:
+        logger.error(f"❌ Game not found or expired - game_id={game_id}")
         return {'error': 'Game not found or expired'}
 
+    logger.info(f"🎮 Game state - current_player={state['current_player']}, phase={state['phase']}, pot={state['pot']}")
+    
     if player != state['current_player']:
+        logger.warning(f"⚠️ Not player's turn - player={player}, current_player={state['current_player']}")
         return {'error': 'Not your turn'}
 
     if action not in ['bet', 'call', 'raise', 'fold']:
+        logger.error(f"❌ Invalid action - action={action}")
         return {'error': 'Invalid action. Use: bet, call, raise, or fold'}
 
     opponent = state['players'][1 - state['players'].index(player)]
     current_bet = state['bets'].get(opponent, 0)
+    
+    logger.info(f"🎯 Betting details - opponent={opponent}, current_bet={current_bet}, player_bet={state['bets'].get(player, 0)}")
 
     if action == 'fold':
         # Player folds, opponent wins pot
@@ -493,11 +529,13 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         state['pot'] += current_bet
 
     # Switch to opponent
+    logger.info(f"🔄 Switching turns - from {player} to {opponent}")
     state['current_player'] = opponent
-
+    
     # Notify the opponent it's their turn
     opponent_name = get_player_name(opponent)
     notify_message = f"🎲 Your turn in Poke-R! {player} made their move. Check your hand and make your bet!"
+    logger.info(f"📢 About to notify opponent - opponent={opponent_name} ({opponent}), message='{notify_message}'")
     notify_player_turn(game_id, opponent, opponent_name, notify_message)
 
     # Check if betting round is complete
@@ -578,14 +616,21 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 @mcp.tool(description="Discard up to 3 cards and draw new ones")
 def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     """Discards up to 3 cards and draws new ones."""
+    logger.info(f"🎲 DISCARD_CARDS called - game_id={game_id}, player={player}, indices={indices}")
+    
     state = get_game_state(game_id)
     if not state:
+        logger.error(f"❌ Game not found or expired - game_id={game_id}")
         return {'error': 'Game not found or expired'}
 
+    logger.info(f"🎮 Game state - phase={state['phase']}, current_player={state['current_player']}")
+
     if state['phase'] != 'draw':
+        logger.warning(f"⚠️ Not in discard phase - current phase={state['phase']}")
         return {'error': 'Not in discard phase'}
 
     if player != state['current_player']:
+        logger.warning(f"⚠️ Not player's turn - player={player}, current_player={state['current_player']}")
         return {'error': 'Not your turn'}
 
     if len(indices) > 3:
@@ -610,6 +655,7 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     other_player = state['current_player']
     other_player_name = get_player_name(other_player)
     notify_message = f"🎲 Second betting round! {player} drew cards. Your turn to bet!"
+    logger.info(f"📢 About to notify other player for second betting round - player={other_player_name} ({other_player}), message='{notify_message}'")
     notify_player_turn(game_id, other_player, other_player_name, notify_message)
 
     save_game_state(game_id, state)
@@ -736,5 +782,10 @@ async def health_check():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
+    
+    logger.info(f"🚀 Starting Poke-R MCP server on {host}:{port}")
+    logger.info(f"🔧 Environment variables - POKE_API_URL={os.environ.get('POKE_API_URL', 'NOT_SET')}, POKE_API_KEY={'***' if os.environ.get('POKE_API_KEY') else 'NOT_SET'}")
+    logger.info(f"📊 Logging configured - level=INFO, handlers=console+file")
+    
     print(f"Starting Poke-R MCP server on {host}:{port}")
     mcp.run(transport="http", host=host, port=port)

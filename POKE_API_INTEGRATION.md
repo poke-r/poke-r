@@ -117,7 +117,7 @@ Authorization: Bearer {POKE_API_KEY}
 ```json
 {
   "phone": "string",
-  "message": "string", 
+  "message": "string",
   "game_id": "string",
   "game_type": "poker",
   "action": "your_turn"
