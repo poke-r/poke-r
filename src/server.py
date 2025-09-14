@@ -83,7 +83,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
 
         # Prepare Poke API payload - only send message field with phone number included
         full_message = f"🎲 Poke-R Game {game_id}\nTo: {player_phone}\n{message}\n\nGame Type: Poker\nAction: Poke"
-        
+
         payload = {
             "message": full_message
         }
@@ -351,6 +351,54 @@ def register_player_tool(phone: str, name: str) -> Dict:
     else:
         return {'error': 'Failed to register player'}
 
+def find_existing_game(player_phones: List[str]) -> str:
+    """Find existing active game between the same two players."""
+    try:
+        r = get_redis()
+        
+        # Create a sorted key for the player pair (order doesn't matter)
+        player_key = ":".join(sorted(player_phones))
+        
+        # Check if there's an active game for this player pair
+        existing_game_id = r.get(f"active_game:{player_key}")
+        
+        if existing_game_id:
+            # Verify the game still exists and is active
+            game_state = get_game_state(existing_game_id.decode())
+            if game_state and not game_state.get('game_over', False):
+                logger.info(f"🔍 Found active game {existing_game_id.decode()} for players {player_phones}")
+                return existing_game_id.decode()
+            else:
+                # Game is over or doesn't exist, clean up the key
+                r.delete(f"active_game:{player_key}")
+                logger.info(f"🧹 Cleaned up inactive game key for players {player_phones}")
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error finding existing game: {e}")
+        return None
+
+def set_active_game(player_phones: List[str], game_id: str) -> None:
+    """Mark a game as active for a player pair."""
+    try:
+        r = get_redis()
+        player_key = ":".join(sorted(player_phones))
+        r.set(f"active_game:{player_key}", game_id, ex=3600)  # 1 hour expiry
+        logger.info(f"✅ Set active game {game_id} for players {player_phones}")
+    except Exception as e:
+        logger.error(f"❌ Error setting active game: {e}")
+
+def clear_active_game(player_phones: List[str]) -> None:
+    """Clear active game for a player pair."""
+    try:
+        r = get_redis()
+        player_key = ":".join(sorted(player_phones))
+        r.delete(f"active_game:{player_key}")
+        logger.info(f"🧹 Cleared active game for players {player_phones}")
+    except Exception as e:
+        logger.error(f"❌ Error clearing active game: {e}")
+
 @mcp.tool(description="Start a new 2-player Poke-R poker game")
 def start_poker(players: List[str]) -> Dict:
     """Starts a 2-player Poke-R duel."""
@@ -379,6 +427,18 @@ def start_poker(players: List[str]) -> Dict:
     for i, phone in enumerate(player_phones):
         if not check_availability(phone):
             return {'error': f"{player_names[i]} ({phone}) is unavailable for Poke-R games—try later?"}
+
+    # Check for existing active game between these players
+    existing_game_id = find_existing_game(player_phones)
+    if existing_game_id:
+        logger.info(f"🔄 Found existing game between players - game_id={existing_game_id}")
+        return {
+            'game_id': existing_game_id,
+            'message': f"🎲 Continuing existing Poke-R game! {player_names[0]} vs {player_names[1]}",
+            'existing_game': True,
+            'players': player_names,
+            'current_player': get_player_name(get_game_state(existing_game_id)['current_player'])
+        }
 
     # Generate game ID
     game_id = f"poker_{uuid.uuid4().hex[:8]}"
@@ -413,6 +473,9 @@ def start_poker(players: List[str]) -> Dict:
     # Save to Redis
     if not save_game_state(game_id, state):
         return {'error': 'Failed to save game state'}
+    
+    # Mark this game as active for this player pair
+    set_active_game(player_phones, game_id)
 
     # Send pending invites
     try:
@@ -458,15 +521,26 @@ def get_my_hand(game_id: str, player: str) -> Dict:
     player_hand = state['hands'].get(player_phone, [])
     player_name = get_player_name(player_phone)
 
+    # Create visually appealing hand display
+    hand_emojis = format_cards(player_hand)
+    hand_display = " | ".join(hand_emojis)
+    
+    # Add hand analysis
+    hand_type, hand_value = evaluate_hand(player_hand)
+    
     return {
         'game_id': game_id,
         'player': player_name,
-        'hand': format_cards(player_hand),
+        'hand': hand_emojis,
+        'hand_display': hand_display,
         'hand_codes': player_hand,  # Keep original codes for game logic
+        'hand_type': hand_type,
+        'hand_value': hand_value,
         'chips': state['chips'].get(player_phone, 0),
         'current_player': get_player_name(state['current_player']),
         'phase': state['phase'],
-        'pot': state['pot']
+        'pot': state['pot'],
+        'visual_summary': f"🎲 {player_name}'s Hand: {hand_display}\n📊 Hand Type: {hand_type}\n💰 Your Chips: {state['chips'].get(player_phone, 0)}\n🏆 Pot: {state['pot']}"
     }
 
 @mcp.tool(description="Place a bet, call, raise, or fold in the current poker game")
@@ -511,6 +585,8 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             notify_player_turn(game_id, winner, winner_name, game_over_message)
 
             save_game_state(game_id, state)
+            # Clear active game since it's over
+            clear_active_game(state['players'])
             return {
                 'message': f"{player} folds! {opponent} wins {state['pot']} chips. Game over! {winner} wins with {state['chips'][winner]} chips! 🥳",
                 'game_over': True,
@@ -612,13 +688,15 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
             if state['current_hand'] > 5:  # End game
                 final_winner = max(state['chips'], key=state['chips'].get)
-                save_game_state(game_id, state)
-                return {
-                    'message': f"{message} Game over! {final_winner} wins with {state['chips'][final_winner]} chips! 🥳",
-                    'game_over': True,
-                    'winner': final_winner,
-                    'final_chips': state['chips']
-                }
+            save_game_state(game_id, state)
+            # Clear active game since it's over
+            clear_active_game(state['players'])
+            return {
+                'message': f"{message} Game over! {final_winner} wins with {state['chips'][final_winner]} chips! 🥳",
+                'game_over': True,
+                'winner': final_winner,
+                'final_chips': state['chips']
+            }
 
             # Start next hand
             deck = DECK.copy()
@@ -814,15 +892,24 @@ def get_game_status(game_id: str) -> Dict:
     if not state:
         return {'error': 'Game not found or expired'}
 
+    # Create visually appealing game status
+    player_names = [get_player_name(p) for p in state['players']]
+    current_player_name = get_player_name(state['current_player'])
+    
+    status_display = f"🎲 Game {game_id}\n👥 Players: {' vs '.join(player_names)}\n🎯 Current Turn: {current_player_name}\n📊 Phase: {state['phase']}\n🏆 Pot: {state['pot']}\n🎲 Hand: {state['current_hand']}/5"
+    
     return {
         'game_id': game_id,
         'players': state['players'],
+        'player_names': player_names,
         'current_player': state['current_player'],
+        'current_player_name': current_player_name,
         'phase': state['phase'],
         'pot': state['pot'],
         'chips': state['chips'],
         'current_hand': state['current_hand'],
-        'bets': state['bets']
+        'bets': state['bets'],
+        'status_display': status_display
     }
 
 @mcp.tool(description="Get server information")
