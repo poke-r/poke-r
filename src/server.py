@@ -4,6 +4,7 @@ import json
 import random
 import uuid
 import datetime
+import requests
 from typing import List, Dict, Optional
 from fastmcp import FastMCP
 import redis
@@ -51,6 +52,38 @@ CARD_EMOJIS = {
 def format_cards(cards: List[str]) -> List[str]:
     """Convert card codes to colorful emoji representations."""
     return [CARD_EMOJIS.get(card, card) for card in cards]
+
+def notify_player_turn(game_id: str, player_phone: str, player_name: str, message: str) -> None:
+    """Send notification to player via Poke API when it's their turn."""
+    try:
+        # Poke API endpoint for sending notifications
+        poke_api_url = os.environ.get("POKE_API_URL", "https://poke.com/api")
+        
+        # Prepare notification payload
+        payload = {
+            "phone": player_phone,
+            "message": message,
+            "game_id": game_id,
+            "game_type": "poker",
+            "action": "your_turn"
+        }
+        
+        # Send notification to Poke API
+        response = requests.post(
+            f"{poke_api_url}/notify",
+            json=payload,
+            timeout=10,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            print(f"✅ Notified {player_name} ({player_phone}) - {message}")
+        else:
+            print(f"⚠️ Failed to notify {player_name} ({player_phone}): {response.status_code}")
+            
+    except Exception as e:
+        print(f"❌ Error notifying {player_name} ({player_phone}): {e}")
+        # Don't fail the game if notification fails
 
 def evaluate_hand(cards: List[str]) -> tuple:
     """Evaluate poker hand strength. Returns (hand_type, rank_value, kickers)."""
@@ -335,6 +368,12 @@ def start_poker(players: List[str]) -> Dict:
     except Exception:
         pass  # Invites are optional
 
+    # Notify the first player it's their turn
+    first_player_name = player_names[0]
+    first_player_phone = player_phones[0]
+    notify_message = f"🎲 Poke-R game started! Your turn to bet first. Check your hand and make your move!"
+    notify_player_turn(game_id, first_player_phone, first_player_name, notify_message)
+
     # Return game info without revealing hands (hands should be sent via DM)
     return {
         'game_id': game_id,
@@ -447,6 +486,11 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
     # Switch to opponent
     state['current_player'] = opponent
+    
+    # Notify the opponent it's their turn
+    opponent_name = get_player_name(opponent)
+    notify_message = f"🎲 Your turn in Poke-R! {player} made their move. Check your hand and make your bet!"
+    notify_player_turn(game_id, opponent, opponent_name, notify_message)
 
     # Check if betting round is complete
     if state['bets'][player] == state['bets'][opponent] and state['bets'][player] > 0:
@@ -553,6 +597,12 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     state['phase'] = 'bet2'
     state['current_player'] = state['players'][1 - state['players'].index(player)]
     state['bets'] = {p: 0 for p in state['players']}
+    
+    # Notify the other player it's their turn for second betting round
+    other_player = state['current_player']
+    other_player_name = get_player_name(other_player)
+    notify_message = f"🎲 Second betting round! {player} drew cards. Your turn to bet!"
+    notify_player_turn(game_id, other_player, other_player_name, notify_message)
 
     save_game_state(game_id, state)
     return {
