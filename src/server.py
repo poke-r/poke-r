@@ -98,12 +98,22 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             f"{poke_api_url}/api/notify",
             f"{poke_api_url}/api/send-notification", 
             f"{poke_api_url}/notify",
-            f"{poke_api_url}/send-notification"
+            f"{poke_api_url}/send-notification",
+            f"{poke_api_url}/api/v1/notify",
+            f"{poke_api_url}/api/v1/send-notification"
         ]
         
+        # First, test if the base URL is reachable
+        logger.info(f"🔍 Testing base URL reachability: {poke_api_url}")
+        try:
+            test_response = requests.get(poke_api_url, timeout=5)
+            logger.info(f"🔍 Base URL test - status_code={test_response.status_code}")
+        except Exception as e:
+            logger.warning(f"⚠️ Base URL not reachable: {e}")
+
         response = None
         successful_endpoint = None
-        
+
         for endpoint in endpoints_to_try:
             logger.info(f"📤 Trying Poke API endpoint: {endpoint}")
             try:
@@ -118,29 +128,37 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
                 )
                 
                 logger.info(f"📥 Response from {endpoint} - status_code={response.status_code}")
+                logger.info(f"📋 Response headers: {dict(response.headers)}")
+                logger.info(f"📄 Response body preview: {response.text[:200]}...")
                 
                 # If we get a 200 or 201, this endpoint works
                 if response.status_code in [200, 201]:
                     successful_endpoint = endpoint
+                    logger.info(f"✅ Found working endpoint: {endpoint}")
                     break
                 # If we get a 404, try the next endpoint
                 elif response.status_code == 404:
-                    logger.info(f"🔄 Endpoint {endpoint} not found, trying next...")
+                    logger.info(f"🔄 Endpoint {endpoint} not found (404), trying next...")
                     continue
                 # For other errors, log and try next
                 else:
                     logger.warning(f"⚠️ Endpoint {endpoint} returned {response.status_code}, trying next...")
+                    logger.warning(f"⚠️ Full response body: {response.text}")
                     continue
                     
             except Exception as e:
-                logger.warning(f"⚠️ Error with endpoint {endpoint}: {e}")
+                logger.warning(f"⚠️ Exception with endpoint {endpoint}: {e}")
+                logger.warning(f"⚠️ Exception type: {type(e).__name__}")
                 continue
-        
+
         if not response:
+            logger.error(f"❌ All Poke API endpoints failed for {player_name} ({player_phone})")
+            logger.error(f"❌ Tried endpoints: {endpoints_to_try}")
+            logger.error(f"❌ Payload was: {json.dumps(payload)}")
             raise Exception("All Poke API endpoints failed")
 
         logger.info(f"📥 Poke API response - status_code={response.status_code}, headers={dict(response.headers)}")
-        
+
         if response.status_code in [200, 201]:
             logger.info(f"✅ Successfully notified {player_name} ({player_phone}) via {successful_endpoint} - {message}")
             logger.info(f"📱 Response body: {response.text}")
