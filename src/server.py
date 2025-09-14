@@ -509,7 +509,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             winner_name = get_player_name(winner)
             game_over_message = f"🎲 Game over! {player} folded and you won! You have {state['chips'][winner]} chips! 🥳"
             logger.info(f"📢 About to notify winner after game over fold - winner={winner_name} ({winner}), message='{game_over_message}'")
-            poke_player_turn(game_id, winner, winner_name, game_over_message)
+            notify_player_turn(game_id, winner, winner_name, game_over_message)
 
             save_game_state(game_id, state)
             return {
@@ -535,7 +535,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         opponent_name = get_player_name(opponent)
         fold_message = f"🎲 {player} folded! You won the hand and {state['pot']} chips! New hand starting..."
         logger.info(f"📢 About to notify opponent after fold - opponent={opponent_name} ({opponent}), message='{fold_message}'")
-        poke_player_turn(game_id, opponent, opponent_name, fold_message)
+        notify_player_turn(game_id, opponent, opponent_name, fold_message)
 
         save_game_state(game_id, state)
         return {
@@ -730,7 +730,7 @@ def poke_player(game_id: str, from_player: str, to_player: str, message: str = N
 
     # Send the poke
     logger.info(f"📤 Sending poke from {from_player_name} ({from_player_phone}) to {to_player_name} ({to_player_phone})")
-    poke_player_turn(game_id, to_player_phone, to_player_name, message)
+    notify_player_turn(game_id, to_player_phone, to_player_name, message)
 
     return {
         'message': f"🔔 Poke sent to {to_player_name}!",
