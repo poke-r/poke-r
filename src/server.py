@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import os
+import sys
 import json
 import random
 import uuid
 import datetime
 import logging
 import traceback
+import signal
+import asyncio
 from typing import List, Dict, Optional
 from fastmcp import FastMCP
 import redis
@@ -21,7 +24,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Poke-R")
 
-# Initialize FastMCP server
+# Global error handler for uncaught exceptions
+def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
+    """Handle uncaught exceptions globally"""
+    if issubclass(exc_type, KeyboardInterrupt):
+        # Allow KeyboardInterrupt to be handled normally
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    
+    logger.error(f"💥 Uncaught exception: {exc_type.__name__}: {exc_value}")
+    logger.debug(f"🔍 Traceback: {traceback.format_exception(exc_type, exc_value, exc_traceback)}")
+    
+    # In production, don't crash the server
+    if os.environ.get("ENVIRONMENT") == "production":
+        logger.error("🔄 Server continuing despite uncaught exception")
+    else:
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+# Set the global exception handler
+sys.excepthook = handle_uncaught_exception
+
+# Custom error handler for MCP server
+def mcp_error_handler(error):
+    """Handle MCP server errors"""
+    logger.error(f"💥 MCP Server Error: {error}")
+    logger.debug(f"🔍 Error details: {traceback.format_exc()}")
+    
+    # Check if it's a connection-related error
+    if "ClosedResourceError" in str(error) or "anyio" in str(error):
+        logger.warning("⚠️ Streamable HTTP connection error detected")
+        logger.info("🔄 This is a known issue with MCP streamable HTTP transport")
+        logger.info("🛡️ Server will continue running with error handling")
+        return True  # Indicate error was handled
+    
+    return False  # Error not handled
+
+# Initialize FastMCP server with enhanced configuration
 mcp = FastMCP("Poke-R Poker Server")
 logger.info("🚀 Initializing Poke-R Poker Server")
 
@@ -184,16 +222,16 @@ def check_availability(phone: str) -> bool:
     if not r:
         logger.debug("📝 Redis not available, defaulting to available")
         return True  # Default to available if no Redis
-    
+
     # Check if availability is enabled
     availability_key = f"user_availability:{phone}"
     availability_status = r.get(availability_key)
     logger.debug(f"📋 Availability status: {availability_status}")
-    
+
     if not availability_status:
         logger.info(f"❌ User {phone} has not enabled Poke-R availability")
         return False
-    
+
     # Check schedule if set
     schedule_key = f"{phone}:schedule"
     schedule_json = r.get(schedule_key)
@@ -204,9 +242,9 @@ def check_availability(phone: str) -> bool:
             now = datetime.datetime.now()
             current_time = now.time()
             current_weekday = now.weekday() + 1  # Monday = 1
-            
+
             logger.debug(f"🕐 Current time: {current_time}, weekday: {current_weekday}")
-            
+
             for window in schedule.get("windows", []):
                 logger.debug(f"🪟 Checking window: {window}")
                 if current_weekday in window.get("days", []):
@@ -221,7 +259,7 @@ def check_availability(phone: str) -> bool:
         except Exception as e:
             logger.error(f"💥 Error checking schedule for {phone}: {e}")
             logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
-    
+
     logger.info(f"✅ User {phone} is available (no schedule restrictions)")
     return True
 
@@ -229,11 +267,11 @@ def check_availability(phone: str) -> bool:
 def start_poker(players: List[str]) -> Dict:
     """Starts a 2-player Poke-R duel."""
     logger.info(f"🎮 Starting new poker game with players: {players}")
-    
+
     if len(players) != 2:
         logger.error(f"❌ Invalid player count: {len(players)} (expected 2)")
         return {'error': 'Exactly 2 players required'}
-    
+
     # Check player availability
     logger.info("🔍 Checking player availability...")
     for player in players:
@@ -241,23 +279,23 @@ def start_poker(players: List[str]) -> Dict:
             logger.warning(f"❌ Player {player} is unavailable")
             return {'error': f"{player} is unavailable for Poke-R games—try later?"}
         logger.info(f"✅ Player {player} is available")
-    
+
     # Generate game ID
     game_id = f"poker_{uuid.uuid4().hex[:8]}"
     logger.info(f"🆔 Generated game ID: {game_id}")
-    
+
     # Create and shuffle deck
     deck = DECK.copy()
     random.shuffle(deck)
     logger.debug(f"🃏 Deck shuffled: {len(deck)} cards")
-    
+
     # Deal initial hands
     hands = {
         players[0]: deck[0:5],
         players[1]: deck[5:10]
     }
     logger.info(f"🎯 Dealt hands: {players[0]}={hands[players[0]]}, {players[1]}={hands[players[1]]}")
-    
+
     # Initialize game state
     state = {
         'game_id': game_id,
@@ -274,12 +312,12 @@ def start_poker(players: List[str]) -> Dict:
         'created_at': datetime.datetime.now().isoformat()
     }
     logger.info(f"📊 Game state initialized: Phase={state['phase']}, Current Player={state['current_player']}")
-    
+
     # Save to Redis
     if not save_game_state(game_id, state):
         logger.error(f"💥 Failed to save game state for {game_id}")
         return {'error': 'Failed to save game state'}
-    
+
     # Send pending invites
     logger.info("📨 Setting up pending invites...")
     for player in players:
@@ -287,7 +325,7 @@ def start_poker(players: List[str]) -> Dict:
         if r:
             r.set(invite_key, "1", ex=600)  # 10-minute timeout
             logger.debug(f"📧 Invite set for {player}: {invite_key}")
-    
+
     logger.info(f"🎉 Game {game_id} started successfully!")
     return {
         'game_id': game_id,
@@ -300,20 +338,20 @@ def start_poker(players: List[str]) -> Dict:
 def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     """Handles bet, call, raise, or fold actions."""
     logger.info(f"🎯 Betting action: {player} -> {action} (amount: {amount}) in game {game_id}")
-    
+
     state = get_game_state(game_id)
     if not state:
         logger.error(f"❌ Game {game_id} not found or expired")
         return {'error': 'Game not found or expired'}
-    
+
     if player != state['current_player']:
         logger.warning(f"❌ Wrong turn: {player} tried to act, but {state['current_player']} is current player")
         return {'error': 'Not your turn'}
-    
+
     if action not in ['bet', 'call', 'raise', 'fold']:
         logger.error(f"❌ Invalid action: {action}")
         return {'error': 'Invalid action. Use: bet, call, raise, or fold'}
-    
+
     opponent = state['players'][1 - state['players'].index(player)]
     current_bet = state['bets'].get(opponent, 0)
     logger.debug(f"🎲 Game state: Phase={state['phase']}, Current bet={current_bet}, Pot={state['pot']}, Player chips={state['chips'][player]}")
@@ -326,7 +364,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         state['bets'] = {p: 0 for p in state['players']}
         state['current_hand'] += 1
         logger.info(f"📊 Hand {state['current_hand']-1} complete. New hand: {state['current_hand']}")
-        
+
         if state['current_hand'] > 5:  # End after 5 hands
             winner = max(state['chips'], key=state['chips'].get)
             logger.info(f"🏆 Game over! Winner: {winner} with {state['chips'][winner]} chips")
@@ -337,7 +375,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                 'winner': winner,
                 'final_chips': state['chips']
             }
-        
+
         # Start next hand
         logger.info("🎲 Starting new hand...")
         deck = DECK.copy()
@@ -351,7 +389,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         state['current_player'] = state['players'][0]
         state['side_bets'] = {}
         logger.info(f"🎯 New hands dealt: {state['players'][0]}={state['hands'][state['players'][0]]}, {state['players'][1]}={state['hands'][state['players'][1]]}")
-        
+
         save_game_state(game_id, state)
         return {
             'message': f"{player} folds! {opponent} wins {state['pot']} chips. Next hand starting...",
@@ -362,26 +400,26 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     elif action in ['bet', 'raise']:
         min_bet = current_bet + 5 if action == 'raise' else 5
         logger.debug(f"💰 {action} validation: amount={amount}, min_bet={min_bet}, player_chips={state['chips'][player]}")
-        
+
         if amount < min_bet:
             logger.warning(f"❌ {player} bet too low: {amount} < {min_bet}")
             return {'error': f'Minimum bet is {min_bet} chips'}
         if state['chips'][player] < amount:
             logger.warning(f"❌ {player} insufficient chips: {state['chips'][player]} < {amount}")
             return {'error': 'Not enough chips'}
-        
+
         state['bets'][player] = amount
         state['chips'][player] -= amount
         state['pot'] += amount
         logger.info(f"💰 {player} {action}s {amount} chips. New pot: {state['pot']}, Player chips: {state['chips'][player]}")
-    
+
     elif action == 'call':
         logger.debug(f"📞 Call validation: current_bet={current_bet}, player_chips={state['chips'][player]}")
-        
+
         if state['chips'][player] < current_bet:
             logger.warning(f"❌ {player} insufficient chips to call: {state['chips'][player]} < {current_bet}")
             return {'error': 'Not enough chips to call'}
-        
+
         state['bets'][player] = current_bet
         state['chips'][player] -= current_bet
         state['pot'] += current_bet
@@ -390,11 +428,11 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     # Switch to opponent
     state['current_player'] = opponent
     logger.debug(f"🔄 Turn switched to: {opponent}")
-    
+
     # Check if betting round is complete
     if state['bets'][player] == state['bets'][opponent] and state['bets'][player] > 0:
         logger.info(f"✅ Betting round complete! Both players bet {state['bets'][player]} chips")
-        
+
         if state['phase'] == 'bet1':
             state['phase'] = 'draw'
             logger.info(f"🎯 Moving to draw phase. {player} can discard up to 3 cards")
@@ -407,14 +445,14 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         elif state['phase'] == 'bet2':
             state['phase'] = 'showdown'
             logger.info("🏁 Showdown time! Comparing hands...")
-            
+
             # Resolve hand
             hand1 = state['hands'][state['players'][0]]
             hand2 = state['hands'][state['players'][1]]
             winner_idx = compare_hands(hand1, hand2)
-            
+
             logger.info(f"🎯 Hand comparison: {state['players'][0]}={hand1} vs {state['players'][1]}={hand2}")
-            
+
             if winner_idx == 1:
                 winner = state['players'][0]
                 winner_hand = hand1
@@ -424,7 +462,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             else:
                 winner = None  # Tie
                 winner_hand = None
-            
+
             if winner:
                 state['chips'][winner] += state['pot']
                 winner_hand_type = evaluate_hand(winner_hand)[0]
@@ -437,12 +475,12 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                 state['chips'][state['players'][1]] += split_amount
                 logger.info(f"🤝 Tie! Pot split: {split_amount} chips each")
                 message = f"Showdown! It's a tie! Pot split equally."
-            
+
             state['pot'] = 0
             state['bets'] = {p: 0 for p in state['players']}
             state['current_hand'] += 1
             logger.info(f"📊 Hand {state['current_hand']-1} complete. New hand: {state['current_hand']}")
-            
+
             if state['current_hand'] > 5:  # End game
                 final_winner = max(state['chips'], key=state['chips'].get)
                 logger.info(f"🏆 Game over! Final winner: {final_winner} with {state['chips'][final_winner]} chips")
@@ -453,7 +491,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                     'winner': final_winner,
                     'final_chips': state['chips']
                 }
-            
+
             # Start next hand
             logger.info("🎲 Starting new hand...")
             deck = DECK.copy()
@@ -467,7 +505,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             state['current_player'] = state['players'][0]
             state['side_bets'] = {}
             logger.info(f"🎯 New hands dealt: {state['players'][0]}={state['hands'][state['players'][0]]}, {state['players'][1]}={state['hands'][state['players'][1]]}")
-            
+
             save_game_state(game_id, state)
             return {
                 'message': f"{message} Next hand starting...",
@@ -488,36 +526,36 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     """Discards up to 3 cards and draws new ones."""
     logger.info(f"🔄 Discard action: {player} discarding cards at indices {indices} in game {game_id}")
-    
+
     state = get_game_state(game_id)
     if not state:
         logger.error(f"❌ Game {game_id} not found or expired")
         return {'error': 'Game not found or expired'}
-    
+
     if state['phase'] != 'draw':
         logger.warning(f"❌ Wrong phase: {state['phase']} (expected 'draw')")
         return {'error': 'Not in discard phase'}
-    
+
     if player != state['current_player']:
         logger.warning(f"❌ Wrong turn: {player} tried to discard, but {state['current_player']} is current player")
         return {'error': 'Not your turn'}
-    
+
     if len(indices) > 3:
         logger.warning(f"❌ Too many cards to discard: {len(indices)} > 3")
         return {'error': 'Maximum 3 cards can be discarded'}
-    
+
     if any(i < 1 or i > 5 for i in indices):
         logger.warning(f"❌ Invalid card indices: {indices} (must be 1-5)")
         return {'error': 'Invalid card indices (use 1-5)'}
-    
+
     # Discard and draw new cards
     hand = state['hands'][player]
     original_hand = hand.copy()
     discarded_cards = []
     new_cards = []
-    
+
     logger.debug(f"🎯 Original hand: {original_hand}")
-    
+
     for i in sorted(indices, reverse=True):
         discarded_card = hand.pop(i-1)  # Convert to 0-based index
         discarded_cards.append(discarded_card)
@@ -525,16 +563,16 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
             new_card = state['deck'].pop(0)
             hand.append(new_card)
             new_cards.append(new_card)
-    
+
     logger.info(f"🔄 {player} discarded: {discarded_cards}, drew: {new_cards}")
     logger.info(f"🎯 New hand: {hand}")
-    
+
     # Switch to second betting round
     state['phase'] = 'bet2'
     state['current_player'] = state['players'][1 - state['players'].index(player)]
     state['bets'] = {p: 0 for p in state['players']}
     logger.info(f"🎯 Moving to bet2 phase. Next player: {state['current_player']}")
-    
+
     save_game_state(game_id, state)
     return {
         'message': f"New cards dealt to {player}. {state['current_player']}, bet (min 5): bet/call/raise/fold.",
@@ -579,16 +617,16 @@ def place_side_bet(game_id: str, player: str, bet_type: str, amount: int) -> Dic
 def toggle_availability(phone: str) -> Dict:
     """Toggles Poke-R availability for a user."""
     logger.info(f"🔧 Toggling availability for user: {phone}")
-    
+
     if not r:
         logger.error("❌ Redis not available for availability toggle")
         return {'error': 'Redis not available'}
-    
+
     key = f"user_availability:{phone}"
     current = r.get(key)
     new_state = not bool(current) if current else True
     r.set(key, str(new_state))
-    
+
     logger.info(f"✅ Availability {'enabled' if new_state else 'disabled'} for {phone}")
     return {
         'message': f"Poke-R availability {'enabled' if new_state else 'disabled'}.",
@@ -599,18 +637,18 @@ def toggle_availability(phone: str) -> Dict:
 def set_schedule(phone: str, schedule_str: str) -> Dict:
     """Sets availability schedule for Poke-R games."""
     logger.info(f"📅 Setting schedule for {phone}: {schedule_str}")
-    
+
     if not r:
         logger.error("❌ Redis not available for schedule setting")
         return {'error': 'Redis not available'}
-    
+
     try:
         times, days_str = schedule_str.split(',')
         start, end = times.strip().split('-')
         days = []
-        
+
         logger.debug(f"🕐 Parsing times: {start} - {end}")
-        
+
         # Parse days
         day_mapping = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
         for day_range in days_str.split('-'):
@@ -618,7 +656,7 @@ def set_schedule(phone: str, schedule_str: str) -> Dict:
             if day_range in day_mapping:
                 days.append(day_mapping[day_range])
                 logger.debug(f"📅 Added day: {day_range} -> {day_mapping[day_range]}")
-        
+
         schedule = {
             "windows": [{
                 "start": start.strip(),
@@ -626,11 +664,11 @@ def set_schedule(phone: str, schedule_str: str) -> Dict:
                 "days": days
             }]
         }
-        
+
         logger.info(f"📅 Schedule parsed: {schedule}")
         r.set(f"{phone}:schedule", json.dumps(schedule))
         logger.info(f"✅ Schedule saved for {phone}")
-        
+
         return {
             'message': f"Schedule set: {schedule_str}",
             'schedule': schedule
@@ -644,20 +682,20 @@ def set_schedule(phone: str, schedule_str: str) -> Dict:
 def accept_invite(game_id: str, phone: str) -> Dict:
     """Accepts a pending game invite."""
     logger.info(f"📧 Accepting invite: {phone} -> {game_id}")
-    
+
     if not r:
         logger.error("❌ Redis not available for invite acceptance")
         return {'error': 'Redis not available'}
-    
+
     invite_key = f"{game_id}:pending:{phone}"
     if not r.get(invite_key):
         logger.warning(f"❌ No pending invite found for {phone} in game {game_id}")
         return {'error': 'No pending invite found'}
-    
+
     # Remove invite
     r.delete(invite_key)
     logger.info(f"✅ Invite accepted and removed for {phone}")
-    
+
     return {
         'message': f"Joined Poke-R game {game_id}! Cards incoming. 🎲",
         'game_id': game_id
@@ -667,12 +705,12 @@ def accept_invite(game_id: str, phone: str) -> Dict:
 def get_game_status(game_id: str) -> Dict:
     """Get current game status."""
     logger.info(f"📊 Getting game status for: {game_id}")
-    
+
     state = get_game_state(game_id)
     if not state:
         logger.warning(f"❌ Game {game_id} not found or expired")
         return {'error': 'Game not found or expired'}
-    
+
     logger.info(f"📊 Game status: Phase={state['phase']}, Hand={state['current_hand']}, Pot={state['pot']}, Current Player={state['current_player']}")
     return {
         'game_id': game_id,
@@ -689,7 +727,7 @@ def get_game_status(game_id: str) -> Dict:
 def get_server_info() -> Dict:
     """Get information about the Poke-R server."""
     logger.info("ℹ️ Server info requested")
-    
+
     info = {
         "server_name": "Poke-R Poker Server",
         "version": "1.0.0",
@@ -697,7 +735,7 @@ def get_server_info() -> Dict:
         "python_version": os.sys.version.split()[0],
         "redis_available": r is not None
     }
-    
+
     logger.info(f"ℹ️ Server info: {info}")
     return info
 
@@ -711,18 +749,80 @@ app = FastAPI()
 async def health_check():
     """Health check endpoint for Render deployment"""
     logger.info("🏥 Health check requested")
-    
+
     health_status = {
         "status": "healthy",
         "redis_available": r is not None,
         "server": "Poke-R Poker Server",
         "version": "1.0.0"
     }
-    
+
     logger.info(f"🏥 Health check response: {health_status}")
     return JSONResponse(health_status)
 
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    global shutdown_requested
+    logger.info(f"🛑 Received signal {signum}, initiating graceful shutdown...")
+    shutdown_requested = True
+
+def run_server_with_retry():
+    """Run the server with retry logic for connection errors"""
+    port = int(os.environ.get("PORT", 8000))
+    host = "0.0.0.0"
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries and not shutdown_requested:
+        try:
+            logger.info(f"🎮 Starting MCP server (attempt {retry_count + 1}/{max_retries})...")
+            
+            # Wrap the MCP run in a try-catch to handle streamable HTTP errors
+            try:
+                mcp.run(
+                    transport="http",
+                    host=host,
+                    port=port,
+                    stateless_http=True
+                )
+            except Exception as mcp_error:
+                # Check if it's the specific streamable HTTP error
+                if "ClosedResourceError" in str(mcp_error) or "anyio" in str(mcp_error):
+                    logger.warning("⚠️ Streamable HTTP connection error caught")
+                    logger.info("🛡️ This is a known MCP transport issue, continuing...")
+                    # Don't treat this as a fatal error
+                    return
+                else:
+                    # Re-raise other errors
+                    raise
+            
+            break  # If we get here, the server ran successfully
+        except Exception as e:
+            retry_count += 1
+            logger.error(f"💥 Server attempt {retry_count} failed: {e}")
+            logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
+            
+            if retry_count < max_retries:
+                logger.info(f"🔄 Retrying in 5 seconds... (attempt {retry_count + 1}/{max_retries})")
+                import time
+                time.sleep(5)
+            else:
+                logger.error("💥 Max retries reached, server failed to start")
+                if os.environ.get("ENVIRONMENT") == "production":
+                    logger.error("🔄 Server will attempt restart in 30 seconds...")
+                    time.sleep(30)
+                    retry_count = 0  # Reset retry count for production restart
+                else:
+                    raise
+
 if __name__ == "__main__":
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
     
@@ -736,20 +836,17 @@ if __name__ == "__main__":
     print(f"Redis available: {r is not None}")
     
     try:
-        logger.info("🎮 Starting MCP server...")
-        mcp.run(
-            transport="http",
-            host=host,
-            port=port,
-            stateless_http=True
-        )
+        run_server_with_retry()
     except KeyboardInterrupt:
         logger.info("🛑 Server shutdown requested by user")
     except Exception as e:
-        logger.error(f"💥 Server startup failed: {e}")
+        logger.error(f"💥 Fatal server error: {e}")
         logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
-        # In production, don't crash the server for connection errors
+        # In production, try to restart
         if os.environ.get("ENVIRONMENT") == "production":
-            logger.error("🔄 Server will continue running despite error")
+            logger.error("🔄 Attempting server restart...")
+            import time
+            time.sleep(10)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
         else:
             raise
