@@ -57,14 +57,14 @@ def evaluate_hand(cards: List[str]) -> tuple:
 
     # Sort by frequency then by rank
     sorted_counts = sorted(rank_counts.items(), key=lambda x: (-x[1], -x[0]))
-    
+
     # Check for hand types
     counts = [count for _, count in sorted_counts]
     rank_values = [rank for rank, _ in sorted_counts]
-    
+
     # Flush check
     is_flush = len(set(suits)) == 1
-    
+
     # Straight check
     is_straight = False
     if len(set(ranks)) == 5:
@@ -74,7 +74,7 @@ def evaluate_hand(cards: List[str]) -> tuple:
         # Check for A-2-3-4-5 straight
         elif sorted_ranks == [0, 1, 2, 3, 12]:  # A-2-3-4-5
             is_straight = True
-    
+
     # Determine hand type
     if is_straight and is_flush:
         if sorted_ranks[-1] == 12:  # Ace high straight flush
@@ -106,18 +106,18 @@ def evaluate_hand(cards: List[str]) -> tuple:
 
 def compare_hands(hand1: List[str], hand2: List[str]) -> int:
     """Compare two poker hands. Returns 1 if hand1 wins, -1 if hand2 wins, 0 if tie."""
-    hand_types = ["high_card", "pair", "two_pair", "three_of_a_kind", "straight", 
+    hand_types = ["high_card", "pair", "two_pair", "three_of_a_kind", "straight",
                   "flush", "full_house", "four_of_a_kind", "straight_flush", "royal_flush"]
-    
+
     type1, rank1, kickers1 = evaluate_hand(hand1)
     type2, rank2, kickers2 = evaluate_hand(hand2)
-    
+
     # Compare hand types
     if hand_types.index(type1) > hand_types.index(type2):
         return 1
     elif hand_types.index(type1) < hand_types.index(type2):
         return -1
-    
+
     # Same hand type, compare ranks
     if isinstance(rank1, list) and isinstance(rank2, list):
         for r1, r2 in zip(rank1, rank2):
@@ -130,14 +130,14 @@ def compare_hands(hand1: List[str], hand2: List[str]) -> int:
             return 1
         elif rank1 < rank2:
             return -1
-    
+
     # Compare kickers
     for k1, k2 in zip(kickers1, kickers2):
         if k1 > k2:
             return 1
         elif k1 < k2:
             return -1
-    
+
     return 0
 
 def get_game_state(game_id: str) -> Optional[Dict]:
@@ -162,12 +162,12 @@ def check_availability(phone: str) -> bool:
     """Check if user is available for Poke-R games."""
     try:
         r = get_redis()
-        
+
         # Check if availability is enabled
         availability_key = f"user_availability:{phone}"
         if not r.get(availability_key):
             return False
-        
+
         # Check schedule if set
         schedule_key = f"{phone}:schedule"
         schedule_json = r.get(schedule_key)
@@ -177,7 +177,7 @@ def check_availability(phone: str) -> bool:
                 now = datetime.datetime.now()
                 current_time = now.time()
                 current_weekday = now.weekday() + 1  # Monday = 1
-                
+
                 for window in schedule.get("windows", []):
                     if current_weekday in window.get("days", []):
                         start_time = datetime.datetime.strptime(window["start"], "%H:%M").time()
@@ -187,7 +187,7 @@ def check_availability(phone: str) -> bool:
                 return False
             except Exception:
                 pass
-        
+
         return True
     except Exception:
         return True  # Default to available if Redis fails
@@ -205,17 +205,17 @@ def start_poker(players: List[str]) -> Dict:
 
     # Generate game ID
     game_id = f"poker_{uuid.uuid4().hex[:8]}"
-    
+
     # Create and shuffle deck
     deck = DECK.copy()
     random.shuffle(deck)
-    
+
     # Deal initial hands
     hands = {
         players[0]: deck[0:5],
         players[1]: deck[5:10]
     }
-    
+
     # Initialize game state
     state = {
         'game_id': game_id,
@@ -231,11 +231,11 @@ def start_poker(players: List[str]) -> Dict:
         'side_bets': {},
         'created_at': datetime.datetime.now().isoformat()
     }
-    
+
     # Save to Redis
     if not save_game_state(game_id, state):
         return {'error': 'Failed to save game state'}
-    
+
     # Send pending invites
     try:
         r = get_redis()
@@ -244,7 +244,7 @@ def start_poker(players: List[str]) -> Dict:
             r.set(invite_key, "1", ex=600)  # 10-minute timeout
     except Exception:
         pass  # Invites are optional
-    
+
     return {
         'game_id': game_id,
         'message': f"🎲 Poke-R duel started! Cards sent via DM. {players[0]}, bet first (min 5): bet/call/raise/fold.",
@@ -258,13 +258,13 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
     state = get_game_state(game_id)
     if not state:
         return {'error': 'Game not found or expired'}
-    
+
     if player != state['current_player']:
         return {'error': 'Not your turn'}
-    
+
     if action not in ['bet', 'call', 'raise', 'fold']:
         return {'error': 'Invalid action. Use: bet, call, raise, or fold'}
-    
+
     opponent = state['players'][1 - state['players'].index(player)]
     current_bet = state['bets'].get(opponent, 0)
 
@@ -274,7 +274,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         state['pot'] = 0
         state['bets'] = {p: 0 for p in state['players']}
         state['current_hand'] += 1
-        
+
         if state['current_hand'] > 5:  # End after 5 hands
             winner = max(state['chips'], key=state['chips'].get)
             save_game_state(game_id, state)
@@ -284,7 +284,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                 'winner': winner,
                 'final_chips': state['chips']
             }
-        
+
         # Start next hand
         deck = DECK.copy()
         random.shuffle(deck)
@@ -296,7 +296,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         state['phase'] = 'bet1'
         state['current_player'] = state['players'][0]
         state['side_bets'] = {}
-        
+
         save_game_state(game_id, state)
         return {
             'message': f"{player} folds! {opponent} wins {state['pot']} chips. Next hand starting...",
@@ -310,22 +310,22 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             return {'error': f'Minimum bet is {min_bet} chips'}
         if state['chips'][player] < amount:
             return {'error': 'Not enough chips'}
-        
+
         state['bets'][player] = amount
         state['chips'][player] -= amount
         state['pot'] += amount
-    
+
     elif action == 'call':
         if state['chips'][player] < current_bet:
             return {'error': 'Not enough chips to call'}
-        
+
         state['bets'][player] = current_bet
         state['chips'][player] -= current_bet
         state['pot'] += current_bet
 
     # Switch to opponent
     state['current_player'] = opponent
-    
+
     # Check if betting round is complete
     if state['bets'][player] == state['bets'][opponent] and state['bets'][player] > 0:
         if state['phase'] == 'bet1':
@@ -346,7 +346,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                 winner = state['players'][1]
             else:
                 winner = None  # Tie
-            
+
             if winner:
                 state['chips'][winner] += state['pot']
                 winner_hand_type = evaluate_hand(state['hands'][winner])[0]
@@ -357,11 +357,11 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                 state['chips'][state['players'][0]] += split_amount
                 state['chips'][state['players'][1]] += split_amount
                 message = f"Showdown! It's a tie! Pot split equally."
-            
+
             state['pot'] = 0
             state['bets'] = {p: 0 for p in state['players']}
             state['current_hand'] += 1
-            
+
             if state['current_hand'] > 5:  # End game
                 final_winner = max(state['chips'], key=state['chips'].get)
                 save_game_state(game_id, state)
@@ -371,7 +371,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
                     'winner': final_winner,
                     'final_chips': state['chips']
                 }
-            
+
             # Start next hand
             deck = DECK.copy()
             random.shuffle(deck)
@@ -383,7 +383,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
             state['phase'] = 'bet1'
             state['current_player'] = state['players'][0]
             state['side_bets'] = {}
-            
+
             save_game_state(game_id, state)
             return {
                 'message': f"{message} Next hand starting...",
@@ -405,31 +405,31 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
     state = get_game_state(game_id)
     if not state:
         return {'error': 'Game not found or expired'}
-    
+
     if state['phase'] != 'draw':
         return {'error': 'Not in discard phase'}
-    
+
     if player != state['current_player']:
         return {'error': 'Not your turn'}
-    
+
     if len(indices) > 3:
         return {'error': 'Maximum 3 cards can be discarded'}
-    
+
     if any(i < 1 or i > 5 for i in indices):
         return {'error': 'Invalid card indices (use 1-5)'}
-    
+
     # Discard and draw new cards
     hand = state['hands'][player]
     for i in sorted(indices, reverse=True):
         hand.pop(i-1)  # Convert to 0-based index
         if state['deck']:
             hand.append(state['deck'].pop(0))
-    
+
     # Switch to second betting round
     state['phase'] = 'bet2'
     state['current_player'] = state['players'][1 - state['players'].index(player)]
     state['bets'] = {p: 0 for p in state['players']}
-    
+
     save_game_state(game_id, state)
     return {
         'message': f"New cards dealt to {player}. {state['current_player']}, bet (min 5): bet/call/raise/fold.",
@@ -445,9 +445,9 @@ def toggle_availability(phone: str) -> Dict:
         r = get_redis()
         key = f"user_availability:{phone}"
         current = r.get(key)
-        new_state = not bool(current) if current else True
+        new_state = False if current and current.lower() == 'true' else True
         r.set(key, str(new_state))
-        
+
         return {
             'message': f"Poke-R availability {'enabled' if new_state else 'disabled'}.",
             'available': new_state
@@ -463,14 +463,14 @@ def set_schedule(phone: str, schedule_str: str) -> Dict:
         times, days_str = schedule_str.split(',')
         start, end = times.strip().split('-')
         days = []
-        
+
         # Parse days
         day_mapping = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
         for day_range in days_str.split('-'):
             day_range = day_range.strip()
             if day_range in day_mapping:
                 days.append(day_mapping[day_range])
-        
+
         schedule = {
             "windows": [{
                 "start": start.strip(),
@@ -478,7 +478,7 @@ def set_schedule(phone: str, schedule_str: str) -> Dict:
                 "days": days
             }]
         }
-        
+
         r.set(f"{phone}:schedule", json.dumps(schedule))
         return {
             'message': f"Schedule set: {schedule_str}",
@@ -495,10 +495,10 @@ def accept_invite(game_id: str, phone: str) -> Dict:
         invite_key = f"{game_id}:pending:{phone}"
         if not r.get(invite_key):
             return {'error': 'No pending invite found'}
-        
+
         # Remove invite
         r.delete(invite_key)
-        
+
         return {
             'message': f"Joined Poke-R game {game_id}! Cards incoming. 🎲",
             'game_id': game_id
@@ -512,7 +512,7 @@ def get_game_status(game_id: str) -> Dict:
     state = get_game_state(game_id)
     if not state:
         return {'error': 'Game not found or expired'}
-    
+
     return {
         'game_id': game_id,
         'players': state['players'],
