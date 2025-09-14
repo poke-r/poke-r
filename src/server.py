@@ -162,13 +162,13 @@ def register_player(phone: str, name: str) -> bool:
     """Register a player with phone number as primary key and name as alias."""
     try:
         r = get_redis()
-        
+
         # Store phone -> name mapping
         r.set(f"player_name:{phone}", name)
-        
+
         # Store name -> phone mapping for reverse lookup
         r.set(f"player_phone:{name}", phone)
-        
+
         return True
     except Exception:
         return False
@@ -177,11 +177,11 @@ def get_player_phone(player_identifier: str) -> str:
     """Get phone number from player identifier (phone or name)."""
     try:
         r = get_redis()
-        
+
         # If it looks like a phone number, return as-is
         if player_identifier.startswith('+') and len(player_identifier) > 5:
             return player_identifier
-        
+
         # Otherwise, look up phone by name
         phone = r.get(f"player_phone:{player_identifier}")
         return phone if phone else player_identifier
@@ -237,10 +237,10 @@ def register_player_tool(phone: str, name: str) -> Dict:
     """Register a player with phone number as primary key and name as alias."""
     if not phone or not name:
         return {'error': 'Both phone number and name are required'}
-    
+
     if not phone.startswith('+'):
         return {'error': 'Phone number must start with + (e.g., +31646118037)'}
-    
+
     if register_player(phone, name):
         return {
             'message': f"Player registered: {name} ({phone})",
@@ -259,15 +259,15 @@ def start_poker(players: List[str]) -> Dict:
     # Convert player identifiers to phone numbers
     player_phones = []
     player_names = []
-    
+
     for player in players:
         phone = get_player_phone(player)
         name = get_player_name(phone)
-        
+
         # Check if player is registered (has phone->name mapping)
         if not get_redis().get(f"player_name:{phone}"):
             return {'error': f"Player '{player}' not registered. Use register_player_tool first with phone number and name."}
-        
+
         player_phones.append(phone)
         player_names.append(name)
 
@@ -319,18 +319,42 @@ def start_poker(players: List[str]) -> Dict:
     except Exception:
         pass  # Invites are optional
 
-    # Create display-friendly hands with names
-    display_hands = {
-        player_names[0]: hands[player_phones[0]],
-        player_names[1]: hands[player_phones[1]]
-    }
-
+    # Return game info without revealing hands (hands should be sent via DM)
     return {
         'game_id': game_id,
         'message': f"🎲 Poke-R duel started! Cards sent via DM. {player_names[0]}, bet first (min 5): bet/call/raise/fold.",
-        'hands': display_hands,
         'chips': {player_names[0]: 100, player_names[1]: 100},
-        'players': player_names
+        'players': player_names,
+        'current_player': player_names[0],
+        'phase': 'bet1'
+    }
+
+@mcp.tool(description="Get your own hand for a poker game")
+def get_my_hand(game_id: str, player: str) -> Dict:
+    """Get a player's own hand without revealing opponent's cards."""
+    state = get_game_state(game_id)
+    if not state:
+        return {'error': 'Game not found or expired'}
+    
+    # Convert player identifier to phone number
+    player_phone = get_player_phone(player)
+    
+    # Check if player is in the game
+    if player_phone not in state['players']:
+        return {'error': 'Player not in this game'}
+    
+    # Get player's hand
+    player_hand = state['hands'].get(player_phone, [])
+    player_name = get_player_name(player_phone)
+    
+    return {
+        'game_id': game_id,
+        'player': player_name,
+        'hand': player_hand,
+        'chips': state['chips'].get(player_phone, 0),
+        'current_player': get_player_name(state['current_player']),
+        'phase': state['phase'],
+        'pot': state['pot']
     }
 
 @mcp.tool(description="Place a bet, call, raise, or fold in the current poker game")
