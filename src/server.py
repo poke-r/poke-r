@@ -70,6 +70,13 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
     """Send poke/nudge to player via Poke API when it's their turn."""
     logger.info(f"🔔 POKE_PLAYER_TURN called - game_id={game_id}, player={player_name} ({player_phone}), message='{message}'")
 
+    # TODO: Poke API integration temporarily disabled - cannot send to other users
+    # The Poke API doesn't support sending messages to other users
+    # For now, players should check game status regularly
+    logger.info(f"📝 Poke API disabled - players should check game status regularly")
+    
+    # Commented out Poke API integration until we figure out how to send to other users
+    """
     try:
         # Poke API endpoint for sending notifications
         poke_api_url = os.environ.get("POKE_API_URL", "https://poke.com")
@@ -83,7 +90,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
 
         # Prepare Poke API payload - only send message field with phone number included
         full_message = f"🎲 Poke-R Game {game_id}\nTo: {player_phone}\n{message}\n\nGame Type: Poker\nAction: Poke"
-
+        
         payload = {
             "message": full_message
         }
@@ -136,6 +143,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
         logger.error(f"❌ Error notifying {player_name} ({player_phone}): {e}")
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
         # Don't fail the game if notification fails
+    """
 
 def evaluate_hand(cards: List[str]) -> tuple:
     """Evaluate poker hand strength. Returns (hand_type, rank_value, kickers)."""
@@ -355,13 +363,13 @@ def find_existing_game(player_phones: List[str]) -> str:
     """Find existing active game between the same two players."""
     try:
         r = get_redis()
-        
+
         # Create a sorted key for the player pair (order doesn't matter)
         player_key = ":".join(sorted(player_phones))
-        
+
         # Check if there's an active game for this player pair
         existing_game_id = r.get(f"active_game:{player_key}")
-        
+
         if existing_game_id:
             # Verify the game still exists and is active
             game_state = get_game_state(existing_game_id.decode())
@@ -372,9 +380,9 @@ def find_existing_game(player_phones: List[str]) -> str:
                 # Game is over or doesn't exist, clean up the key
                 r.delete(f"active_game:{player_key}")
                 logger.info(f"🧹 Cleaned up inactive game key for players {player_phones}")
-        
+
         return None
-        
+
     except Exception as e:
         logger.error(f"❌ Error finding existing game: {e}")
         return None
@@ -473,7 +481,7 @@ def start_poker(players: List[str]) -> Dict:
     # Save to Redis
     if not save_game_state(game_id, state):
         return {'error': 'Failed to save game state'}
-    
+
     # Mark this game as active for this player pair
     set_active_game(player_phones, game_id)
 
@@ -496,11 +504,12 @@ def start_poker(players: List[str]) -> Dict:
     # Return game info without revealing hands (hands should be sent via DM)
     return {
         'game_id': game_id,
-        'message': f"🎲 Poke-R duel started! Cards sent via DM. {player_names[0]}, bet first (min 5): bet/call/raise/fold.",
+        'message': f"🎲 Poke-R duel started! Cards sent via DM. {player_names[0]}, bet first (min 5): bet/call/raise/fold.\n\n⏰ Check game status every minute to stay updated!",
         'chips': {player_names[0]: 100, player_names[1]: 100},
         'players': player_names,
         'current_player': player_names[0],
-        'phase': 'bet1'
+        'phase': 'bet1',
+        'reminder': "⏰ Check game status every minute to stay updated on your turn!"
     }
 
 @mcp.tool(description="Get your own hand for a poker game")
@@ -524,10 +533,10 @@ def get_my_hand(game_id: str, player: str) -> Dict:
     # Create visually appealing hand display
     hand_emojis = format_cards(player_hand)
     hand_display = " | ".join(hand_emojis)
-    
+
     # Add hand analysis
     hand_type, hand_value = evaluate_hand(player_hand)
-    
+
     return {
         'game_id': game_id,
         'player': player_name,
@@ -719,10 +728,11 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
     save_game_state(game_id, state)
     return {
-        'message': f"{player} {action}s {amount or ''}! {opponent}, your move: bet/call/raise/fold.",
+        'message': f"{player} {action}s {amount or ''}! {opponent}, your move: bet/call/raise/fold.\n\n⏰ Check game status every minute to stay updated!",
         'current_player': opponent,
         'pot': state['pot'],
-        'chips': state['chips']
+        'chips': state['chips'],
+        'reminder': "⏰ Check game status every minute to stay updated on your turn!"
     }
 
 @mcp.tool(description="Discard up to 3 cards and draw new ones")
@@ -772,49 +782,25 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
 
     save_game_state(game_id, state)
     return {
-        'message': f"New cards dealt to {player}. {state['current_player']}, bet (min 5): bet/call/raise/fold.",
+        'message': f"New cards dealt to {player}. {state['current_player']}, bet (min 5): bet/call/raise/fold.\n\n⏰ Check game status every minute to stay updated!",
         'phase': 'bet2',
         'current_player': state['current_player'],
-        'hand': state['hands'][player]
+        'hand': state['hands'][player],
+        'reminder': "⏰ Check game status every minute to stay updated on your turn!"
     }
 
-@mcp.tool(description="Send a poke/nudge to another player in a game")
+# TODO: Poke player function temporarily disabled - Poke API cannot send to other users
+# @mcp.tool(description="Send a poke/nudge to another player in a game")
 def poke_player(game_id: str, from_player: str, to_player: str, message: str = None) -> Dict:
     """Send a poke/nudge to another player in a game."""
-    # Force redeploy - fix function name references
     logger.info(f"🔔 POKE_PLAYER called - game_id={game_id}, from={from_player}, to={to_player}, message='{message}'")
-
-    state = get_game_state(game_id)
-    if not state:
-        logger.error(f"❌ Game not found or expired - game_id={game_id}")
-        return {'error': 'Game not found or expired'}
-
-    # Check if both players are in the game
-    if from_player not in state['players'] or to_player not in state['players']:
-        logger.error(f"❌ One or both players not in game - from={from_player}, to={to_player}, players={state['players']}")
-        return {'error': 'One or both players not in this game'}
-
-    # Get player phone numbers
-    from_player_phone = from_player  # Assuming player parameter is phone number
-    to_player_phone = to_player
-
-    # Get player names for display
-    from_player_name = get_player_name(from_player)
-    to_player_name = get_player_name(to_player)
-
-    # Default message if none provided
-    if not message:
-        message = f"🎲 {from_player_name} poked you! It's your turn in Poke-R!"
-
-    # Send the poke
-    logger.info(f"📤 Sending poke from {from_player_name} ({from_player_phone}) to {to_player_name} ({to_player_phone})")
-    notify_player_turn(game_id, to_player_phone, to_player_name, message)
-
+    
+    # Poke API integration temporarily disabled
     return {
-        'message': f"🔔 Poke sent to {to_player_name}!",
-        'from_player': from_player_name,
-        'to_player': to_player_name,
-        'poke_message': message
+        'message': f"🔔 Poke functionality temporarily disabled. Players should check game status regularly!",
+        'note': "Check game status every minute to stay updated on your turn.",
+        'from_player': get_player_name(from_player),
+        'to_player': get_player_name(to_player)
     }
 
 @mcp.tool(description="Toggle Poke-R availability for receiving game invites")
@@ -895,9 +881,9 @@ def get_game_status(game_id: str) -> Dict:
     # Create visually appealing game status
     player_names = [get_player_name(p) for p in state['players']]
     current_player_name = get_player_name(state['current_player'])
-    
+
     status_display = f"🎲 Game {game_id}\n👥 Players: {' vs '.join(player_names)}\n🎯 Current Turn: {current_player_name}\n📊 Phase: {state['phase']}\n🏆 Pot: {state['pot']}\n🎲 Hand: {state['current_hand']}/5"
-    
+
     return {
         'game_id': game_id,
         'players': state['players'],
