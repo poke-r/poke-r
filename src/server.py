@@ -81,13 +81,12 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             logger.warning(f"⚠️ POKE_API_KEY not set - skipping notification to {player_name}")
             return
 
-        # Prepare Poke API payload - use "poke" action to nudge the player
+        # Prepare Poke API payload - send everything as a single message string
+        full_message = f"🎲 Poke-R Game {game_id}\n{message}\n\nGame Type: Poker\nAction: Poke"
+        
         payload = {
             "phone": player_phone,
-            "message": message,
-            "game_id": game_id,
-            "game_type": "poker",
-            "action": "poke"  # Use "poke" to nudge the player
+            "message": full_message
         }
 
         logger.info(f"📤 Sending Poke API poke/nudge - payload={json.dumps(payload)}")
@@ -505,13 +504,13 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
 
         if state['current_hand'] > 5:  # End after 5 hands
             winner = max(state['chips'], key=state['chips'].get)
-            
+
             # Notify the winner that the game is over
             winner_name = get_player_name(winner)
             game_over_message = f"🎲 Game over! {player} folded and you won! You have {state['chips'][winner]} chips! 🥳"
             logger.info(f"📢 About to notify winner after game over fold - winner={winner_name} ({winner}), message='{game_over_message}'")
             poke_player_turn(game_id, winner, winner_name, game_over_message)
-            
+
             save_game_state(game_id, state)
             return {
                 'message': f"{player} folds! {opponent} wins {state['pot']} chips. Game over! {winner} wins with {state['chips'][winner]} chips! 🥳",
@@ -537,7 +536,7 @@ def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
         fold_message = f"🎲 {player} folded! You won the hand and {state['pot']} chips! New hand starting..."
         logger.info(f"📢 About to notify opponent after fold - opponent={opponent_name} ({opponent}), message='{fold_message}'")
         poke_player_turn(game_id, opponent, opponent_name, fold_message)
-        
+
         save_game_state(game_id, state)
         return {
             'message': f"{player} folds! {opponent} wins {state['pot']} chips. Next hand starting...",
@@ -706,33 +705,33 @@ def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
 def poke_player(game_id: str, from_player: str, to_player: str, message: str = None) -> Dict:
     """Send a poke/nudge to another player in a game."""
     logger.info(f"🔔 POKE_PLAYER called - game_id={game_id}, from={from_player}, to={to_player}, message='{message}'")
-    
+
     state = get_game_state(game_id)
     if not state:
         logger.error(f"❌ Game not found or expired - game_id={game_id}")
         return {'error': 'Game not found or expired'}
-    
+
     # Check if both players are in the game
     if from_player not in state['players'] or to_player not in state['players']:
         logger.error(f"❌ One or both players not in game - from={from_player}, to={to_player}, players={state['players']}")
         return {'error': 'One or both players not in this game'}
-    
+
     # Get player phone numbers
     from_player_phone = from_player  # Assuming player parameter is phone number
     to_player_phone = to_player
-    
+
     # Get player names for display
     from_player_name = get_player_name(from_player)
     to_player_name = get_player_name(to_player)
-    
+
     # Default message if none provided
     if not message:
         message = f"🎲 {from_player_name} poked you! It's your turn in Poke-R!"
-    
+
     # Send the poke
     logger.info(f"📤 Sending poke from {from_player_name} ({from_player_phone}) to {to_player_name} ({to_player_phone})")
     poke_player_turn(game_id, to_player_phone, to_player_name, message)
-    
+
     return {
         'message': f"🔔 Poke sent to {to_player_name}!",
         'from_player': from_player_name,
