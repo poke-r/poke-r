@@ -10,7 +10,7 @@
 - ♣️ = Clubs
 - ♠️ = Spades
 
-## 🎯 **Paula's Current Hand**
+## 🎯 **Example Hand**
 
 **Original Codes**: `['2C', 'TD', '4H', '7S', 'TC']`
 
@@ -35,7 +35,7 @@
 - **Red**: ♥️♦️ (Hearts & Diamonds)
 - **Black**: ♣️♠️ (Clubs & Spades)
 
-## 🎯 **Paula's Hand Analysis**
+## 🎯 **Hand Analysis Example**
 
 **Hand**: `['2C', 'TD', '4H', '7S', 'TC']`
 - **Pair of 10s**: Two 10s (TD, TC)
@@ -43,16 +43,16 @@
 - **Colors**: Black, Red, Red, Black, Black
 - **Strength**: Medium hand (pair)
 
-## 🎮 **Commands for Paula**
+## 🎮 **Commands for Any Player**
 
 ### **Check Hand** (with emojis when server updates):
 ```
-get_my_hand(game_id="poker_2a9d62ad", player="Paula Stolk")
+get_my_hand(game_id="poker_2a9d62ad", player="Your Name")
 ```
 
 ### **Make Move**:
 ```
-place_bet(game_id="poker_2a9d62ad", player="Paula Stolk", action="bet", amount=10)
+place_bet(game_id="poker_2a9d62ad", player="Your Name", action="bet", amount=10)
 ```
 
 ---

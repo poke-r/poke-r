@@ -115,11 +115,11 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
                     "Authorization": f"Bearer {poke_api_key}"
                 }
             )
-            
+
             logger.info(f"📥 Response from {endpoint} - status_code={response.status_code}")
             logger.info(f"📋 Response headers: {dict(response.headers)}")
             logger.info(f"📄 Response body preview: {response.text[:200]}...")
-            
+
         except Exception as e:
             logger.error(f"❌ Exception with endpoint {endpoint}: {e}")
             logger.error(f"❌ Exception type: {type(e).__name__}")
@@ -127,7 +127,7 @@ def notify_player_turn(game_id: str, player_phone: str, player_name: str, messag
             raise Exception(f"Failed to send to Poke API endpoint: {e}")
 
         logger.info(f"📥 Poke API response - status_code={response.status_code}, headers={dict(response.headers)}")
-        
+
         if response.status_code in [200, 201]:
             logger.info(f"✅ Successfully poked {player_name} ({player_phone}) via {endpoint} - {message}")
             logger.info(f"📱 Response body: {response.text}")

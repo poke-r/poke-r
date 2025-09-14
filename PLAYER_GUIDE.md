@@ -19,7 +19,7 @@
 #### **Check Your Hand**
 To see your cards, use:
 ```
-get_my_hand(game_id="poker_2a9d62ad", player="Paula Stolk")
+get_my_hand(game_id="poker_2a9d62ad", player="Your Name")
 ```
 
 **Response will show:**
@@ -38,28 +38,28 @@ When it's your turn, you can:
 
 **Bet** (place initial bet):
 ```
-place_bet(game_id="poker_2a9d62ad", player="Paula Stolk", action="bet", amount=10)
+place_bet(game_id="poker_2a9d62ad", player="Your Name", action="bet", amount=10)
 ```
 
 **Call** (match opponent's bet):
 ```
-place_bet(game_id="poker_2a9d62ad", player="Paula Stolk", action="call")
+place_bet(game_id="poker_2a9d62ad", player="Your Name", action="call")
 ```
 
 **Raise** (increase the bet):
 ```
-place_bet(game_id="poker_2a9d62ad", player="Paula Stolk", action="raise", amount=20)
+place_bet(game_id="poker_2a9d62ad", player="Your Name", action="raise", amount=20)
 ```
 
 **Fold** (give up the hand):
 ```
-place_bet(game_id="poker_2a9d62ad", player="Paula Stolk", action="fold")
+place_bet(game_id="poker_2a9d62ad", player="Your Name", action="fold")
 ```
 
 #### **Discard Cards** (during draw phase)
 If you want to replace some cards:
 ```
-discard_cards(game_id="poker_2a9d62ad", player="Paula Stolk", indices=[1, 3])
+discard_cards(game_id="poker_2a9d62ad", player="Your Name", indices=[1, 3])
 ```
 *Note: indices are 1-5, representing card positions*
 
