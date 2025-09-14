@@ -1,20 +1,49 @@
-# MCP Server Template
+# Poke-R: MCP-Powered 2-Player Poker Game
 
-A minimal [FastMCP](https://github.com/jlowin/fastmcp) server template for Render deployment with streamable HTTP transport.
+**Poke-R** is a head-to-head poker duel where two players play Five-Card Draw in chat. Each gets 5 private cards (via Poke DMs), bets, discards/draws up to 3 cards, bets again, and reveals hands. Players start with 100 chips, bluffing and strategizing over 3-5 hands (5-10 minutes). Poke parses commands (e.g., "Poke, raise 20") and calls an MCP server to manage state and resolve hands (e.g., "Alice's flush beats Bob's pair!"). Human psychology drives thousands of outcomes per game, keeping AI at bay. Privacy toggles ensure opt-in play, making it spam-free.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/InteractionCo/mcp-server-template)
+**Key Value Proposition**: Intense, bluff-heavy poker duels in your chats—no apps, human-driven, spam-free.
+
+**Target Users**: Casual gamers, buddies on iMessage/WhatsApp, Poke beta testers, HackMIT participants.
+
+## Features
+
+### Core Gameplay
+- **2-Player Five-Card Draw**: Deal, bet, discard/draw, resolve hands
+- **Virtual Chips**: Start with 100 chips each, bet strategically
+- **Bluffing Mechanics**: Side bets, psychological gameplay
+- **Async Play**: 2-minute turn timers for chat environments
+- **Private Cards**: Cards sent via Poke DMs for privacy
+
+### Privacy Controls
+- **Availability Toggle**: Control when you can receive game invites
+- **Scheduled Availability**: Set specific hours (e.g., "19:00-22:00, Mon-Fri")
+- **Consent-Based Invites**: Explicit accept/decline for all invites
+- **Mute/Block Options**: Temporary or permanent notification controls
+
+### Game Commands
+- `Poke, start Poke-R with [buddy]` - Start a new game
+- `Poke, bet 10` / `call` / `raise 20` / `fold` - Betting actions
+- `Poke, discard 1,3` - Discard cards (up to 3)
+- `Poke, side bet 10 on pair+` - Optional side bets
+- `Poke, toggle Poke-R availability` - Privacy controls
+
+## Technical Architecture
+
+- **Client**: Poke (parses commands, DMs cards, renders results)
+- **Backend**: MCP Server (Python + FastMCP)
+- **Storage**: Redis (game state, hands, chips, user settings)
+- **Deployment**: Render (free tier)
 
 ## Local Development
 
 ### Setup
 
-Fork the repo, then run:
-
 ```bash
 git clone <your-repo-url>
-cd mcp-server-template
-conda create -n mcp-server python=3.13
-conda activate mcp-server
+cd poke-r
+conda create -n poke-r python=3.13
+conda activate poke-r
 pip install -r requirements.txt
 ```
 
@@ -26,7 +55,7 @@ python src/server.py
 npx @modelcontextprotocol/inspector
 ```
 
-Open http://localhost:3000 and connect to `http://localhost:8000/mcp` using "Streamable HTTP" transport (NOTE THE `/mcp`!).
+Open http://localhost:3000 and connect to `http://localhost:8000/mcp` using "Streamable HTTP" transport.
 
 ## Deployment
 
@@ -40,27 +69,28 @@ Click the "Deploy to Render" button above.
 4. Connect your forked repository
 5. Render will automatically detect the `render.yaml` configuration
 
-Your server will be available at `https://your-service-name.onrender.com/mcp` (NOTE THE `/mcp`!)
+Your server will be available at `https://your-service-name.onrender.com/mcp`
 
-## Poke Setup
+## Poke Integration
 
-You can connect your MCP server to Poke at (poke.com/settings/connections)[poke.com/settings/connections].
-To test the connection explitly, ask poke somethink like `Tell the subagent to use the "{connection name}" integration's "{tool name}" tool`.
-If you run into persistent issues of poke not calling the right MCP (e.g. after you've renamed the connection) you may send `clearhistory` to poke to delete all message history and start fresh.
-We're working hard on improving the integration use of Poke :)
+Connect your MCP server to Poke at [poke.com/settings/connections](https://poke.com/settings/connections).
 
+To test the connection explicitly, ask Poke something like: `Tell the subagent to use the "Poke-R" integration's "start_poker" tool`.
 
-## Customization
+If you run into persistent issues with Poke not calling the right MCP (e.g., after renaming the connection), you may send `clearhistory` to Poke to delete all message history and start fresh.
 
-Add more tools by decorating functions with `@mcp.tool`:
+## Success Metrics
 
-```python
-@mcp.tool
-def calculate(x: float, y: float, operation: str) -> float:
-    """Perform basic arithmetic operations."""
-    if operation == "add":
-        return x + y
-    elif operation == "multiply":
-        return x * y
-    # ...
-```
+- Deployable MVP with core poker mechanics
+- 100 concurrent games, <1s response time
+- Zero spam complaints
+- Privacy-first design with opt-in controls
+
+## Implementation Status
+
+- ✅ Core poker game logic
+- ✅ MCP tools for game operations
+- ✅ Privacy controls and availability management
+- ✅ Redis state management
+- ✅ Render deployment configuration
+- 🔄 Poke integration testing

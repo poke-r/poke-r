@@ -1,28 +1,571 @@
 #!/usr/bin/env python3
 import os
+import json
+import random
+import uuid
+import datetime
+from typing import List, Dict, Optional
 from fastmcp import FastMCP
+import redis
 
-mcp = FastMCP("Sample MCP Server")
+# Initialize FastMCP server
+mcp = FastMCP("Poke-R Poker Server")
 
-@mcp.tool(description="Greet a user by name with a welcome message from the MCP server")
-def greet(name: str) -> str:
-    return f"Hello, {name}! Welcome to our sample MCP server running on Heroku!"
+# Initialize Redis connection
+try:
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    r = redis.from_url(redis_url, decode_responses=True)
+    # Test connection
+    r.ping()
+except Exception as e:
+    print(f"Redis connection failed: {e}")
+    # Fallback to in-memory storage for development
+    r = None
 
-@mcp.tool(description="Get information about the MCP server including name, version, environment, and Python version")
-def get_server_info() -> dict:
+# Deck: 52 cards (e.g., "2H" = 2 of Hearts, "TJ" = 10 of Jacks)
+DECK = [f"{rank}{suit}" for rank in "23456789TJQKA" for suit in "HDCS"]
+
+# Card ranking for hand evaluation
+CARD_RANKS = {rank: i for i, rank in enumerate("23456789TJQKA")}
+
+def evaluate_hand(cards: List[str]) -> tuple:
+    """Evaluate poker hand strength. Returns (hand_type, rank_value, kickers)."""
+    if len(cards) != 5:
+        return ("invalid", 0, [])
+
+    # Parse cards
+    ranks = []
+    suits = []
+    for card in cards:
+        rank = card[:-1]
+        suit = card[-1]
+        ranks.append(CARD_RANKS[rank])
+        suits.append(suit)
+
+    # Count rank frequencies
+    rank_counts = {}
+    for rank in ranks:
+        rank_counts[rank] = rank_counts.get(rank, 0) + 1
+
+    # Sort by frequency then by rank
+    sorted_counts = sorted(rank_counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+
+    # Check for flush
+    is_flush = len(set(suits)) == 1
+
+    # Check for straight
+    sorted_ranks = sorted(ranks)
+    is_straight = (
+        sorted_ranks == list(range(min(sorted_ranks), max(sorted_ranks) + 1)) or
+        sorted_ranks == [0, 1, 2, 3, 12]  # A-2-3-4-5 straight
+    )
+
+    # Determine hand type
+    counts = [count for _, count in sorted_counts]
+
+    if is_straight and is_flush:
+        if sorted_ranks == [8, 9, 10, 11, 12]:  # Royal flush
+            return ("royal_flush", 13, [])
+        else:
+            return ("straight_flush", max(sorted_ranks), [])
+    elif counts == [4, 1]:
+        return ("four_of_a_kind", sorted_counts[0][0], [sorted_counts[1][0]])
+    elif counts == [3, 2]:
+        return ("full_house", sorted_counts[0][0], [sorted_counts[1][0]])
+    elif is_flush:
+        return ("flush", max(sorted_ranks), sorted(sorted_ranks, reverse=True))
+    elif is_straight:
+        return ("straight", max(sorted_ranks), [])
+    elif counts == [3, 1, 1]:
+        return ("three_of_a_kind", sorted_counts[0][0], [sorted_counts[1][0], sorted_counts[2][0]])
+    elif counts == [2, 2, 1]:
+        return ("two_pair", max(sorted_counts[0][0], sorted_counts[1][0]),
+                [min(sorted_counts[0][0], sorted_counts[1][0]), sorted_counts[2][0]])
+    elif counts == [2, 1, 1, 1]:
+        return ("pair", sorted_counts[0][0], [sorted_counts[1][0], sorted_counts[2][0], sorted_counts[3][0]])
+    else:
+        return ("high_card", max(sorted_ranks), sorted(sorted_ranks, reverse=True))
+
+def compare_hands(hand1: List[str], hand2: List[str]) -> int:
+    """Compare two hands. Returns 1 if hand1 wins, -1 if hand2 wins, 0 if tie."""
+    eval1 = evaluate_hand(hand1)
+    eval2 = evaluate_hand(hand2)
+
+    hand_rankings = {
+        "royal_flush": 9, "straight_flush": 8, "four_of_a_kind": 7,
+        "full_house": 6, "flush": 5, "straight": 4, "three_of_a_kind": 3,
+        "two_pair": 2, "pair": 1, "high_card": 0
+    }
+
+    rank1 = hand_rankings[eval1[0]]
+    rank2 = hand_rankings[eval2[0]]
+
+    if rank1 > rank2:
+        return 1
+    elif rank1 < rank2:
+        return -1
+    else:
+        # Same hand type, compare rank values and kickers
+        if eval1[1] > eval2[1]:
+            return 1
+        elif eval1[1] < eval2[1]:
+            return -1
+        else:
+            # Compare kickers
+            for k1, k2 in zip(eval1[2], eval2[2]):
+                if k1 > k2:
+                    return 1
+                elif k1 < k2:
+                    return -1
+            return 0
+
+def get_game_state(game_id: str) -> Optional[Dict]:
+    """Get game state from Redis or return None if not found."""
+    if not r:
+        return None
+    try:
+        state_json = r.get(game_id)
+        return json.loads(state_json) if state_json else None
+    except Exception:
+        return None
+
+def save_game_state(game_id: str, state: Dict) -> bool:
+    """Save game state to Redis. Returns True if successful."""
+    if not r:
+        return False
+    try:
+        r.set(game_id, json.dumps(state), ex=3600)  # Expire after 1 hour
+        return True
+    except Exception:
+        return False
+
+def check_availability(phone: str) -> bool:
+    """Check if user is available for Poke-R games."""
+    if not r:
+        return True  # Default to available if no Redis
+
+    # Check if availability is enabled
+    availability_key = f"user_availability:{phone}"
+    if not r.get(availability_key):
+        return False
+
+    # Check schedule if set
+    schedule_key = f"{phone}:schedule"
+    schedule_json = r.get(schedule_key)
+    if schedule_json:
+        try:
+            schedule = json.loads(schedule_json)
+            now = datetime.datetime.now()
+            current_time = now.time()
+            current_weekday = now.weekday() + 1  # Monday = 1
+
+            for window in schedule.get("windows", []):
+                if current_weekday in window.get("days", []):
+                    start_time = datetime.datetime.strptime(window["start"], "%H:%M").time()
+                    end_time = datetime.datetime.strptime(window["end"], "%H:%M").time()
+                    if start_time <= current_time <= end_time:
+                        return True
+            return False
+        except Exception:
+            pass
+
+    return True
+
+@mcp.tool(description="Start a new 2-player Poke-R poker game")
+def start_poker(players: List[str]) -> Dict:
+    """Starts a 2-player Poke-R duel."""
+    if len(players) != 2:
+        return {'error': 'Exactly 2 players required'}
+
+    # Check player availability
+    for player in players:
+        if not check_availability(player):
+            return {'error': f"{player} is unavailable for Poke-R games—try later?"}
+
+    # Generate game ID
+    game_id = f"poker_{uuid.uuid4().hex[:8]}"
+
+    # Create and shuffle deck
+    deck = DECK.copy()
+    random.shuffle(deck)
+
+    # Deal initial hands
+    hands = {
+        players[0]: deck[0:5],
+        players[1]: deck[5:10]
+    }
+
+    # Initialize game state
+    state = {
+        'game_id': game_id,
+        'players': players,
+        'chips': {players[0]: 100, players[1]: 100},
+        'hands': hands,
+        'current_hand': 1,
+        'pot': 0,
+        'bets': {players[0]: 0, players[1]: 0},
+        'phase': 'bet1',  # bet1, draw, bet2, showdown
+        'deck': deck[10:],
+        'current_player': players[0],
+        'side_bets': {},
+        'created_at': datetime.datetime.now().isoformat()
+    }
+
+    # Save to Redis
+    if not save_game_state(game_id, state):
+        return {'error': 'Failed to save game state'}
+
+    # Send pending invites
+    for player in players:
+        invite_key = f"{game_id}:pending:{player}"
+        if r:
+            r.set(invite_key, "1", ex=600)  # 10-minute timeout
+
     return {
-        "server_name": "Sample MCP Server",
+        'game_id': game_id,
+        'message': f"🎲 Poke-R duel started! Cards sent via DM. {players[0]}, bet first (min 5): bet/call/raise/fold.",
+        'hands': hands,
+        'chips': state['chips']
+    }
+
+@mcp.tool(description="Place a bet, call, raise, or fold in the current poker game")
+def place_bet(game_id: str, player: str, action: str, amount: int = 0) -> Dict:
+    """Handles bet, call, raise, or fold actions."""
+    state = get_game_state(game_id)
+    if not state:
+        return {'error': 'Game not found or expired'}
+
+    if player != state['current_player']:
+        return {'error': 'Not your turn'}
+
+    if action not in ['bet', 'call', 'raise', 'fold']:
+        return {'error': 'Invalid action. Use: bet, call, raise, or fold'}
+
+    opponent = state['players'][1 - state['players'].index(player)]
+    current_bet = state['bets'].get(opponent, 0)
+
+    if action == 'fold':
+        # Player folds, opponent wins pot
+        state['chips'][opponent] += state['pot']
+        state['pot'] = 0
+        state['bets'] = {p: 0 for p in state['players']}
+        state['current_hand'] += 1
+
+        if state['current_hand'] > 5:  # End after 5 hands
+            winner = max(state['chips'], key=state['chips'].get)
+            save_game_state(game_id, state)
+            return {
+                'message': f"{player} folds! {opponent} wins {state['pot']} chips. Game over! {winner} wins with {state['chips'][winner]} chips! 🥳",
+                'game_over': True,
+                'winner': winner,
+                'final_chips': state['chips']
+            }
+
+        # Start next hand
+        deck = DECK.copy()
+        random.shuffle(deck)
+        state['hands'] = {
+            state['players'][0]: deck[0:5],
+            state['players'][1]: deck[5:10]
+        }
+        state['deck'] = deck[10:]
+        state['phase'] = 'bet1'
+        state['current_player'] = state['players'][0]
+        state['side_bets'] = {}
+
+        save_game_state(game_id, state)
+        return {
+            'message': f"{player} folds! {opponent} wins {state['pot']} chips. Next hand starting...",
+            'new_hand': True,
+            'hands': state['hands']
+        }
+
+    elif action in ['bet', 'raise']:
+        min_bet = current_bet + 5 if action == 'raise' else 5
+        if amount < min_bet:
+            return {'error': f'Minimum bet is {min_bet} chips'}
+        if state['chips'][player] < amount:
+            return {'error': 'Not enough chips'}
+
+        state['bets'][player] = amount
+        state['chips'][player] -= amount
+        state['pot'] += amount
+
+    elif action == 'call':
+        if state['chips'][player] < current_bet:
+            return {'error': 'Not enough chips to call'}
+
+        state['bets'][player] = current_bet
+        state['chips'][player] -= current_bet
+        state['pot'] += current_bet
+
+    # Switch to opponent
+    state['current_player'] = opponent
+
+    # Check if betting round is complete
+    if state['bets'][player] == state['bets'][opponent] and state['bets'][player] > 0:
+        if state['phase'] == 'bet1':
+            state['phase'] = 'draw'
+            save_game_state(game_id, state)
+            return {
+                'message': f"Bets matched! {player}, discard up to 3 cards: 'Poke, discard [indices]'.",
+                'phase': 'draw',
+                'current_player': player
+            }
+        elif state['phase'] == 'bet2':
+            state['phase'] = 'showdown'
+            # Resolve hand
+            winner_idx = compare_hands(state['hands'][state['players'][0]], state['hands'][state['players'][1]])
+            if winner_idx == 1:
+                winner = state['players'][0]
+            elif winner_idx == -1:
+                winner = state['players'][1]
+            else:
+                winner = None  # Tie
+
+            if winner:
+                state['chips'][winner] += state['pot']
+                winner_hand_type = evaluate_hand(state['hands'][winner])[0]
+                message = f"Showdown! {winner} wins {state['pot']} chips with {winner_hand_type}!"
+            else:
+                # Split pot on tie
+                split_amount = state['pot'] // 2
+                state['chips'][state['players'][0]] += split_amount
+                state['chips'][state['players'][1]] += split_amount
+                message = f"Showdown! It's a tie! Pot split equally."
+
+            state['pot'] = 0
+            state['bets'] = {p: 0 for p in state['players']}
+            state['current_hand'] += 1
+
+            if state['current_hand'] > 5:  # End game
+                final_winner = max(state['chips'], key=state['chips'].get)
+                save_game_state(game_id, state)
+                return {
+                    'message': f"{message} Game over! {final_winner} wins with {state['chips'][final_winner]} chips! 🥳",
+                    'game_over': True,
+                    'winner': final_winner,
+                    'final_chips': state['chips']
+                }
+
+            # Start next hand
+            deck = DECK.copy()
+            random.shuffle(deck)
+            state['hands'] = {
+                state['players'][0]: deck[0:5],
+                state['players'][1]: deck[5:10]
+            }
+            state['deck'] = deck[10:]
+            state['phase'] = 'bet1'
+            state['current_player'] = state['players'][0]
+            state['side_bets'] = {}
+
+            save_game_state(game_id, state)
+            return {
+                'message': f"{message} Next hand starting...",
+                'new_hand': True,
+                'hands': state['hands']
+            }
+
+    save_game_state(game_id, state)
+    return {
+        'message': f"{player} {action}s {amount or ''}! {opponent}, your move: bet/call/raise/fold.",
+        'current_player': opponent,
+        'pot': state['pot'],
+        'chips': state['chips']
+    }
+
+@mcp.tool(description="Discard up to 3 cards and draw new ones")
+def discard_cards(game_id: str, player: str, indices: List[int]) -> Dict:
+    """Discards up to 3 cards and draws new ones."""
+    state = get_game_state(game_id)
+    if not state:
+        return {'error': 'Game not found or expired'}
+
+    if state['phase'] != 'draw':
+        return {'error': 'Not in discard phase'}
+
+    if player != state['current_player']:
+        return {'error': 'Not your turn'}
+
+    if len(indices) > 3:
+        return {'error': 'Maximum 3 cards can be discarded'}
+
+    if any(i < 1 or i > 5 for i in indices):
+        return {'error': 'Invalid card indices (use 1-5)'}
+
+    # Discard and draw new cards
+    hand = state['hands'][player]
+    for i in sorted(indices, reverse=True):
+        hand.pop(i-1)  # Convert to 0-based index
+        if state['deck']:
+            hand.append(state['deck'].pop(0))
+
+    # Switch to second betting round
+    state['phase'] = 'bet2'
+    state['current_player'] = state['players'][1 - state['players'].index(player)]
+    state['bets'] = {p: 0 for p in state['players']}
+
+    save_game_state(game_id, state)
+    return {
+        'message': f"New cards dealt to {player}. {state['current_player']}, bet (min 5): bet/call/raise/fold.",
+        'phase': 'bet2',
+        'current_player': state['current_player'],
+        'hand': state['hands'][player]
+    }
+
+@mcp.tool(description="Place a side bet on hand outcome")
+def place_side_bet(game_id: str, player: str, bet_type: str, amount: int) -> Dict:
+    """Place a side bet (e.g., 'pair+' for pair or better)."""
+    state = get_game_state(game_id)
+    if not state:
+        return {'error': 'Game not found or expired'}
+
+    if player not in state['players']:
+        return {'error': 'Not a player in this game'}
+
+    if state['chips'][player] < amount:
+        return {'error': 'Not enough chips'}
+
+    if player in state.get('side_bets', {}):
+        return {'error': 'Already placed a side bet this hand'}
+
+    # Initialize side bets if not exists
+    if 'side_bets' not in state:
+        state['side_bets'] = {}
+
+    state['side_bets'][player] = {
+        'type': bet_type,
+        'amount': amount
+    }
+    state['chips'][player] -= amount
+
+    save_game_state(game_id, state)
+    return {
+        'message': f"{player} placed side bet: {amount} chips on {bet_type}",
+        'side_bet': state['side_bets'][player]
+    }
+
+@mcp.tool(description="Toggle Poke-R availability for receiving game invites")
+def toggle_availability(phone: str) -> Dict:
+    """Toggles Poke-R availability for a user."""
+    if not r:
+        return {'error': 'Redis not available'}
+
+    key = f"user_availability:{phone}"
+    current = r.get(key)
+    new_state = not bool(current) if current else True
+    r.set(key, str(new_state))
+
+    return {
+        'message': f"Poke-R availability {'enabled' if new_state else 'disabled'}.",
+        'available': new_state
+    }
+
+@mcp.tool(description="Set availability schedule (e.g., '19:00-22:00, Mon-Fri')")
+def set_schedule(phone: str, schedule_str: str) -> Dict:
+    """Sets availability schedule for Poke-R games."""
+    if not r:
+        return {'error': 'Redis not available'}
+
+    try:
+        times, days_str = schedule_str.split(',')
+        start, end = times.strip().split('-')
+        days = []
+
+        # Parse days
+        day_mapping = {'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 7}
+        for day_range in days_str.split('-'):
+            day_range = day_range.strip()
+            if day_range in day_mapping:
+                days.append(day_mapping[day_range])
+
+        schedule = {
+            "windows": [{
+                "start": start.strip(),
+                "end": end.strip(),
+                "days": days
+            }]
+        }
+
+        r.set(f"{phone}:schedule", json.dumps(schedule))
+        return {
+            'message': f"Schedule set: {schedule_str}",
+            'schedule': schedule
+        }
+    except Exception as e:
+        return {'error': f'Invalid format—try "19:00-22:00, Mon-Fri". Error: {str(e)}'}
+
+@mcp.tool(description="Accept a pending Poke-R game invite")
+def accept_invite(game_id: str, phone: str) -> Dict:
+    """Accepts a pending game invite."""
+    if not r:
+        return {'error': 'Redis not available'}
+
+    invite_key = f"{game_id}:pending:{phone}"
+    if not r.get(invite_key):
+        return {'error': 'No pending invite found'}
+
+    # Remove invite
+    r.delete(invite_key)
+
+    return {
+        'message': f"Joined Poke-R game {game_id}! Cards incoming. 🎲",
+        'game_id': game_id
+    }
+
+@mcp.tool(description="Get current game status and state")
+def get_game_status(game_id: str) -> Dict:
+    """Get current game status."""
+    state = get_game_state(game_id)
+    if not state:
+        return {'error': 'Game not found or expired'}
+
+    return {
+        'game_id': game_id,
+        'players': state['players'],
+        'current_player': state['current_player'],
+        'phase': state['phase'],
+        'pot': state['pot'],
+        'chips': state['chips'],
+        'current_hand': state['current_hand'],
+        'bets': state['bets']
+    }
+
+@mcp.tool(description="Get server information")
+def get_server_info() -> Dict:
+    """Get information about the Poke-R server."""
+    return {
+        "server_name": "Poke-R Poker Server",
         "version": "1.0.0",
         "environment": os.environ.get("ENVIRONMENT", "development"),
-        "python_version": os.sys.version.split()[0]
+        "python_version": os.sys.version.split()[0],
+        "redis_available": r is not None
     }
+
+# Add health check endpoint
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Render deployment"""
+    return JSONResponse({
+        "status": "healthy",
+        "redis_available": r is not None,
+        "server": "Poke-R Poker Server",
+        "version": "1.0.0"
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
-    
-    print(f"Starting FastMCP server on {host}:{port}")
-    
+
+    print(f"Starting Poke-R MCP server on {host}:{port}")
+    print(f"Redis available: {r is not None}")
+
     mcp.run(
         transport="http",
         host=host,
