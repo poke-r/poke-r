@@ -158,6 +158,45 @@ def save_game_state(game_id: str, state: Dict) -> bool:
     except Exception:
         return False
 
+def register_player(phone: str, name: str) -> bool:
+    """Register a player with phone number as primary key and name as alias."""
+    try:
+        r = get_redis()
+        
+        # Store phone -> name mapping
+        r.set(f"player_name:{phone}", name)
+        
+        # Store name -> phone mapping for reverse lookup
+        r.set(f"player_phone:{name}", phone)
+        
+        return True
+    except Exception:
+        return False
+
+def get_player_phone(player_identifier: str) -> str:
+    """Get phone number from player identifier (phone or name)."""
+    try:
+        r = get_redis()
+        
+        # If it looks like a phone number, return as-is
+        if player_identifier.startswith('+') and len(player_identifier) > 5:
+            return player_identifier
+        
+        # Otherwise, look up phone by name
+        phone = r.get(f"player_phone:{player_identifier}")
+        return phone if phone else player_identifier
+    except Exception:
+        return player_identifier
+
+def get_player_name(phone: str) -> str:
+    """Get player name from phone number."""
+    try:
+        r = get_redis()
+        name = r.get(f"player_name:{phone}")
+        return name if name else phone
+    except Exception:
+        return phone
+
 def check_availability(phone: str) -> bool:
     """Check if user is available for Poke-R games."""
     try:
@@ -193,16 +232,49 @@ def check_availability(phone: str) -> bool:
     except Exception:
         return True  # Default to available if Redis fails
 
+@mcp.tool(description="Register a player with phone number and name")
+def register_player_tool(phone: str, name: str) -> Dict:
+    """Register a player with phone number as primary key and name as alias."""
+    if not phone or not name:
+        return {'error': 'Both phone number and name are required'}
+    
+    if not phone.startswith('+'):
+        return {'error': 'Phone number must start with + (e.g., +31646118037)'}
+    
+    if register_player(phone, name):
+        return {
+            'message': f"Player registered: {name} ({phone})",
+            'phone': phone,
+            'name': name
+        }
+    else:
+        return {'error': 'Failed to register player'}
+
 @mcp.tool(description="Start a new 2-player Poke-R poker game")
 def start_poker(players: List[str]) -> Dict:
     """Starts a 2-player Poke-R duel."""
     if len(players) != 2:
         return {'error': 'Exactly 2 players required'}
 
-    # Check player availability
+    # Convert player identifiers to phone numbers
+    player_phones = []
+    player_names = []
+    
     for player in players:
-        if not check_availability(player):
-            return {'error': f"{player} is unavailable for Poke-R games—try later?"}
+        phone = get_player_phone(player)
+        name = get_player_name(phone)
+        
+        # Check if player is registered (has phone->name mapping)
+        if not get_redis().get(f"player_name:{phone}"):
+            return {'error': f"Player '{player}' not registered. Use register_player_tool first with phone number and name."}
+        
+        player_phones.append(phone)
+        player_names.append(name)
+
+    # Check player availability by phone number
+    for i, phone in enumerate(player_phones):
+        if not check_availability(phone):
+            return {'error': f"{player_names[i]} ({phone}) is unavailable for Poke-R games—try later?"}
 
     # Generate game ID
     game_id = f"poker_{uuid.uuid4().hex[:8]}"
@@ -211,24 +283,25 @@ def start_poker(players: List[str]) -> Dict:
     deck = DECK.copy()
     random.shuffle(deck)
 
-    # Deal initial hands
+    # Deal initial hands (use phone numbers as keys internally)
     hands = {
-        players[0]: deck[0:5],
-        players[1]: deck[5:10]
+        player_phones[0]: deck[0:5],
+        player_phones[1]: deck[5:10]
     }
 
-    # Initialize game state
+    # Initialize game state (use phone numbers internally, display names externally)
     state = {
         'game_id': game_id,
-        'players': players,
-        'chips': {players[0]: 100, players[1]: 100},
+        'players': player_phones,  # Store phone numbers internally
+        'player_names': player_names,  # Store names for display
+        'chips': {player_phones[0]: 100, player_phones[1]: 100},
         'hands': hands,
         'current_hand': 1,
         'pot': 0,
-        'bets': {players[0]: 0, players[1]: 0},
+        'bets': {player_phones[0]: 0, player_phones[1]: 0},
         'phase': 'bet1',  # bet1, draw, bet2, showdown
         'deck': deck[10:],
-        'current_player': players[0],
+        'current_player': player_phones[0],
         'side_bets': {},
         'created_at': datetime.datetime.now().isoformat()
     }
@@ -240,17 +313,24 @@ def start_poker(players: List[str]) -> Dict:
     # Send pending invites
     try:
         r = get_redis()
-        for player in players:
-            invite_key = f"{game_id}:pending:{player}"
+        for phone in player_phones:
+            invite_key = f"{game_id}:pending:{phone}"
             r.set(invite_key, "1", ex=600)  # 10-minute timeout
     except Exception:
         pass  # Invites are optional
 
+    # Create display-friendly hands with names
+    display_hands = {
+        player_names[0]: hands[player_phones[0]],
+        player_names[1]: hands[player_phones[1]]
+    }
+
     return {
         'game_id': game_id,
-        'message': f"🎲 Poke-R duel started! Cards sent via DM. {players[0]}, bet first (min 5): bet/call/raise/fold.",
-        'hands': hands,
-        'chips': state['chips']
+        'message': f"🎲 Poke-R duel started! Cards sent via DM. {player_names[0]}, bet first (min 5): bet/call/raise/fold.",
+        'hands': display_hands,
+        'chips': {player_names[0]: 100, player_names[1]: 100},
+        'players': player_names
     }
 
 @mcp.tool(description="Place a bet, call, raise, or fold in the current poker game")
