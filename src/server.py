@@ -151,6 +151,9 @@ def get_game_state(game_id: str) -> Optional[Dict]:
         else:
             logger.debug(f"❌ No game state found for ID: {game_id}")
             return None
+    except redis.ConnectionError as e:
+        logger.warning(f"⚠️ Redis connection lost: {e}")
+        return None
     except Exception as e:
         logger.error(f"💥 Error getting game state for {game_id}: {e}")
         logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
@@ -167,6 +170,9 @@ def save_game_state(game_id: str, state: Dict) -> bool:
         r.set(game_id, state_json, ex=3600)  # Expire after 1 hour
         logger.debug(f"✅ Game state saved successfully: {len(state_json)} bytes, expires in 1 hour")
         return True
+    except redis.ConnectionError as e:
+        logger.warning(f"⚠️ Redis connection lost during save: {e}")
+        return False
     except Exception as e:
         logger.error(f"💥 Error saving game state for {game_id}: {e}")
         logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
@@ -737,7 +743,13 @@ if __name__ == "__main__":
             port=port,
             stateless_http=True
         )
+    except KeyboardInterrupt:
+        logger.info("🛑 Server shutdown requested by user")
     except Exception as e:
         logger.error(f"💥 Server startup failed: {e}")
         logger.debug(f"🔍 Traceback: {traceback.format_exc()}")
-        raise
+        # In production, don't crash the server for connection errors
+        if os.environ.get("ENVIRONMENT") == "production":
+            logger.error("🔄 Server will continue running despite error")
+        else:
+            raise
