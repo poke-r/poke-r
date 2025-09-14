@@ -31,10 +31,10 @@ def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    
+
     logger.error(f"💥 Uncaught exception: {exc_type.__name__}: {exc_value}")
     logger.debug(f"🔍 Traceback: {traceback.format_exception(exc_type, exc_value, exc_traceback)}")
-    
+
     # In production, don't crash the server
     if os.environ.get("ENVIRONMENT") == "production":
         logger.error("🔄 Server continuing despite uncaught exception")
@@ -50,13 +50,13 @@ sys.excepthook = handle_uncaught_exception
 def mcp_error_handler(error):
     """Handle MCP server errors"""
     logger.error(f"💥 MCP Server Error: {error}")
-    
+
     # Check if it's a connection-related error
     if "ClosedResourceError" in str(error) or "anyio" in str(error):
         logger.warning("⚠️ Streamable HTTP connection error detected")
         logger.info("🛡️ Server will continue running with error handling")
         return True  # Indicate error was handled
-    
+
     return False  # Error not handled
 ```
 
@@ -66,11 +66,11 @@ def run_server_with_retry():
     """Run the server with retry logic for connection errors"""
     max_retries = 3
     retry_count = 0
-    
+
     while retry_count < max_retries and not shutdown_requested:
         try:
             logger.info(f"🎮 Starting MCP server (attempt {retry_count + 1}/{max_retries})...")
-            
+
             # Wrap the MCP run in a try-catch to handle streamable HTTP errors
             try:
                 mcp.run(
@@ -87,12 +87,12 @@ def run_server_with_retry():
                     return  # Don't treat this as a fatal error
                 else:
                     raise  # Re-raise other errors
-            
+
             break  # If we get here, the server ran successfully
         except Exception as e:
             retry_count += 1
             logger.error(f"💥 Server attempt {retry_count} failed: {e}")
-            
+
             if retry_count < max_retries:
                 logger.info(f"🔄 Retrying in 5 seconds...")
                 time.sleep(5)
