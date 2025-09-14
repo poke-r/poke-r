@@ -23,11 +23,15 @@ get_my_hand(game_id="poker_2a9d62ad", player="Paula Stolk")
 ```
 
 **Response will show:**
-- Your hand (your 5 cards)
+- Your hand (your 5 cards with colorful emojis)
 - Your current chips
 - Who's turn it is
 - Current game phase
 - Pot size
+
+**Card Colors:**
+- ♥️♦️ = Red suits (Hearts & Diamonds)
+- ♣️♠️ = Black suits (Clubs & Spades)
 
 #### **Make Your Move**
 When it's your turn, you can:

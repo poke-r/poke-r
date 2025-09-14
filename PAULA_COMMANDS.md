@@ -8,13 +8,14 @@ get_my_hand(game_id="poker_2a9d62ad", player="Paula Stolk")
 ```
 
 ### 🎯 **Your Current Hand**
-- **2♣** (2 of Clubs)
-- **T♦** (10 of Diamonds)
-- **4♥** (4 of Hearts)
-- **7♠** (7 of Spades)
-- **T♣** (10 of Clubs)
+- **2♣️** (2 of Clubs - Black)
+- **10♦️** (10 of Diamonds - Red) 
+- **4♥️** (4 of Hearts - Red)
+- **7♠️** (7 of Spades - Black)
+- **10♣️** (10 of Clubs - Black)
 
 **You have a Pair of 10s!** 🎯
+**Red suits: ♥️♦️ | Black suits: ♣️♠️**
 
 ### 🎮 **Available Actions**
 
