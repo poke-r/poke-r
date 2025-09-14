@@ -968,4 +968,5 @@ if __name__ == "__main__":
     logger.info(f"📊 Logging configured - level=INFO, handlers=console+file")
 
     print(f"Starting Poke-R MCP server on {host}:{port}")
+    # Force deployment refresh
     mcp.run(transport="http", host=host, port=port)

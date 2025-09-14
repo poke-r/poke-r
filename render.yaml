@@ -6,6 +6,7 @@ services:
     startCommand: python src/server.py
     plan: free
     autoDeploy: false
+    # Force rebuild by updating this comment
     envVars:
       - key: ENVIRONMENT
         value: production
